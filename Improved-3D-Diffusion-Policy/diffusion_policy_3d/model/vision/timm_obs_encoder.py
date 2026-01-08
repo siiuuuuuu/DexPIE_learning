@@ -50,7 +50,7 @@ class AttentionPool2d(nn.Module):
         )
         return x.squeeze(0)
     
-
+#对图像能调整指定参数大小，无需在数据集预处理中调整
 class TimmObsEncoder(ModuleAttrMixin):
     def __init__(self,
             shape_meta: dict,
@@ -276,7 +276,7 @@ class TimmObsEncoder(ModuleAttrMixin):
             img = img.reshape(B*T, *img.shape[2:])
 
             if img.shape[2:] != self.key_shape_map[key]:
-                target_H, target_W = self.key_shape_map[key][1], self.key_shape_map[key][2]
+                target_H, target_W = self.key_shape_map[key][1], self.key_shape_map[key][2]#自动将输入插值到模型要求的大小
                 # do torchvision resize
                 # img shape: Bx3xHxW
                 # new size: Bx3xnHxnW
@@ -288,7 +288,7 @@ class TimmObsEncoder(ModuleAttrMixin):
             features.append(feature.reshape(B, -1))
             # print("feat:", feature.device)
 
-        # process lowdim input
+        # process lowdim input 如agent_pos
         for key in self.low_dim_keys:
             data = obs_dict[key]
             B, T = data.shape[:2]

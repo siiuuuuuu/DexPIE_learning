@@ -349,8 +349,10 @@ class DiffusionImagePolicy(BasePolicy):
             trajectory, noise, timesteps)
         
         # compute loss mask
-        loss_mask = ~condition_mask
-
+        loss_mask = ~condition_mask#作为条件的位置为0，让该位置的loss为0
+        if "mask"in batch:
+            padding_mask=batch['mask'].unsqueeze(-1).to(trajectory.device)#[B,T,1] 为1的位置为有效数据
+            loss_mask = loss_mask & padding_mask
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
 

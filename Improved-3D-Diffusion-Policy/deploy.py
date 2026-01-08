@@ -19,36 +19,38 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
 from diffusion_policy_3d.common.multi_realsense import MultiRealSense
+from diffusion_policy_3d.common.tools import MATHTOOLS
 
-zenoh_path="/home/gr1p24ap0049/projects/gr1-dex-real/teleop-zenoh"
-sys.path.append(zenoh_path)
-from communication import *
-from retarget import ArmRetarget
+from communication.UR_communication import UR_Comm
+from communication.InspireHandControl_V1 import InspireHand
 
 
 import numpy as np
 import torch
 from termcolor import cprint
 
-class GR1DexEnvInference:
+
+class UR_Inspire_EnvInference:
     """
     The deployment is running on the local computer of the robot.
     """
-    def __init__(self, obs_horizon=2, action_horizon=8, device="gpu",
-                use_point_cloud=True, use_image=True, img_size=224,
+    def __init__(self, obs_horizon=1, action_horizon=24, device="gpu",
+                use_point_cloud=False, use_image=True, img_size=256,
                  num_points=4096,
                  use_waist=False):
         
         # obs/action
         self.use_point_cloud = use_point_cloud
         self.use_image = use_image
-        
         self.use_waist = use_waist
-        
+        self.dt=1/25 #与训练时一致
+        self.tools=MATHTOOLS()
+
         # camera
-        self.camera = MultiRealSense(use_front_cam=True, # by default we use single cam. but we also support multi-cam
+        self.camera = MultiRealSense(use_front_cam=True, use_right_cam=False, # by default we use single cam. but we also support multi-cam
                             front_num_points=num_points,
                             img_size=img_size)
+        print("camera init")
 
         # horizon
         self.obs_horizon = obs_horizon
@@ -61,52 +63,67 @@ class GR1DexEnvInference:
             self.device = torch.device("cpu")
         
         # robot comm
-        self.upbody_comm = UpperBodyCommunication()
-        self.hand_comm = HandCommunication()
-        self.arm_solver = ArmRetarget("AVP")
+        self.arm_comm = UR_Comm()
+        print("arm_comm connected")
+        self.hand_comm = InspireHand()
+        print("hand_comm connected")
+
+        time.sleep(1)
+        self.hand_comm.reset()
+        time.sleep(1)
+        self.hand_comm.setpower(500, 500, 500, 500, 500)
+        self.hand_comm.setspeed(300, 300, 300, 300, 300)
+
     
     
-    def step(self, action_list):
-        
+    def step(self, action_list: np.ndarray):
+
+        current_arm_mat=self.tools.xyz_rotvec_to_mat(self.arm_comm.get_robot_state()['mat'])#当前TCP位姿
+        print("current_arm_mat:",self.arm_comm.get_robot_state()['mat'])
         for action_id in range(self.action_horizon):
+            start_time=time.time()
+
             act = action_list[action_id]
-            self.action_array.append(act)
-            act = action_util.joint25_to_joint32(act)
+            relative_arm_mat=self.tools.xyz_6drot_to_mat(np.expand_dims(act[:9],axis=0))[0]
+            arm_mat=np.dot(current_arm_mat,relative_arm_mat)#叠加相对位姿
+
+            arm_action=self.tools.mat2xyz_rotvec(arm_mat)#UR格式
+            hand_action=act[9:]*1000 #反归一化到0-1000
+
+            hand_action=np.clip(hand_action, 0, 1000)
+
+            pinky_angle = int(hand_action[0])
+            ring_angle = int(hand_action[1])
+            middle_angle = int(hand_action[2])
+            index_angle = int(hand_action[3])
+            thumb_angle_2 = int(hand_action[4])
+            thumb_angle = int(hand_action[5])
             
-            filtered_act = act.copy()
-            filtered_pos = filtered_act[:-12]
-            filtered_handpos = filtered_act[-12:]
-            if not self.use_waist:
-                filtered_pos[0:6] = 0.
+            self.arm_comm.set_arm_action(arm_action)#执行动作，非阻塞
+            self.hand_comm.setangle(pinky_angle, 
+                                    ring_angle, 
+                                    middle_angle, 
+                                    index_angle, 
+                                    thumb_angle_2, 
+                                    thumb_angle)#执行动作，非阻塞
             
-            self.upbody_comm.set_pos(filtered_pos)
-            self.hand_comm.send_hand_cmd(filtered_handpos[6:], filtered_handpos[:6])
-            
-            
-            cam_dict = self.camera()
-            self.cloud_array.append(cam_dict['point_cloud'])
-            self.color_array.append(cam_dict['color'])
-            self.depth_array.append(cam_dict['depth'])
-            
-            try:
-                hand_qpos = self.hand_comm.get_qpos()
-            except:
-                cprint("fail to fetch hand qpos. use default.", "red")
-                hand_qpos = np.ones(12)
-            env_qpos = np.concatenate([self.upbody_comm.get_pos(), hand_qpos])
-            self.env_qpos_array.append(env_qpos)
+            if action_id != self.action_horizon-1:
+                time.sleep(max(0, self.dt-(time.time()-start_time)))#保持25Hz频率
+
+        #同步策略，执行完再获取观察
+        cam_dict = self.camera()#回调获取最新一帧
+        self.color_array.append(cam_dict['front_color'])
+        env_qpos =self.arm_comm.get_robot_state()['joint_positions']
+        self.env_qpos_array.append(env_qpos)
             
         
         agent_pos = np.stack(self.env_qpos_array[-self.obs_horizon:], axis=0)
-    
-        obs_cloud = np.stack(self.cloud_array[-self.obs_horizon:], axis=0)
+
         obs_img = np.stack(self.color_array[-self.obs_horizon:], axis=0)
             
         obs_dict = {
             'agent_pos': torch.from_numpy(agent_pos).unsqueeze(0).to(self.device),
         }
-        if self.use_point_cloud:
-            obs_dict['point_cloud'] = torch.from_numpy(obs_cloud).unsqueeze(0).to(self.device)
         if self.use_image:
             obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0)
 
@@ -117,69 +134,39 @@ class GR1DexEnvInference:
         self.color_array, self.depth_array, self.cloud_array = [], [], []
         self.env_qpos_array = []
         self.action_array = []
-    
-    
-        # pos init
-        qpos_init1 = np.array([-np.pi / 12, 0, 0, -1.6, 0, 0, 0, 
-            -np.pi / 12, 0, 0, -1.6, 0, 0, 0])
-        qpos_init2 = np.array([-np.pi / 12, 0, 1.5, -1.6, 0, 0, 0, 
-                -np.pi / 12, 0, -1.5, -1.6, 0, 0, 0])
-        hand_init = np.ones(12)
-        # hand_init = np.ones(12) * 0
 
         if first_init:
             # ======== INIT ==========
-            upbody_initpos = np.concatenate([qpos_init2])
-            self.upbody_comm.init_set_pos(upbody_initpos)
-            self.hand_comm.send_hand_cmd(hand_init[6:], hand_init[:6])
-
-        upbody_initpos = np.concatenate([qpos_init1])
-        self.upbody_comm.init_set_pos(upbody_initpos)
-        q_14d = upbody_initpos.copy()
-            
-        body_action = np.zeros(6)
-        
-        # this is a must for eef pos alignment
-        arm_pos, arm_rot_quat = action_util.init_arm_pos, action_util.init_arm_quat
-        q_14d = self.arm_solver.ik(q_14d, arm_pos, arm_rot_quat)
-        self.upbody_comm.init_set_pos(q_14d)
-        time.sleep(2)
+            self.arm_comm.reset_arm()
+            self.hand_comm.reset()
+            self.camera.start()
+        time.sleep(1)
         
         print("Robot ready!")
         
         # ======== INIT ==========
-        # camera.start()
-        cam_dict = self.camera()
-        self.color_array.append(cam_dict['color'])
-        self.depth_array.append(cam_dict['depth'])
-        self.cloud_array.append(cam_dict['point_cloud'])
+        cam_dict = self.camera()#回调获取最新一帧
+        self.color_array.append(cam_dict['front_color'])
 
-        try:
-            hand_qpos = self.hand_comm.get_qpos()
-        except:
-            cprint("fail to fetch hand qpos. use default.", "red")
-            hand_qpos = np.ones(12)
-
-        env_qpos = np.concatenate([self.upbody_comm.get_pos(), hand_qpos])
+        env_qpos =self.arm_comm.get_robot_state()['joint_positions']
         self.env_qpos_array.append(env_qpos)
-                        
-        self.q_14d = q_14d
-        self.body_action = body_action
-    
+                    
 
         agent_pos = np.stack([self.env_qpos_array[-1]]*self.obs_horizon, axis=0)
-        
-        obs_cloud = np.stack([self.cloud_array[-1]]*self.obs_horizon, axis=0)
         obs_img = np.stack([self.color_array[-1]]*self.obs_horizon, axis=0)
         obs_dict = {
             'agent_pos': torch.from_numpy(agent_pos).unsqueeze(0).to(self.device),
         }
-        if self.use_point_cloud:
-            obs_dict['point_cloud'] = torch.from_numpy(obs_cloud).unsqueeze(0).to(self.device)
         if self.use_image:
             obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0)
             
-        return obs_dict
+        return obs_dict#获取起始观察
+    
+    def close(self):
+
+        self.arm_comm.cleanup()
+        self.hand_comm.close()
+        self.camera.finalize()
 
 
 @hydra.main(
@@ -208,7 +195,7 @@ def main(cfg: OmegaConf):
     # pour
     roll_out_length_dict = {
         "pour": 300,
-        "grasp": 1000,
+        "grasp": 3000,
         "wipe": 300,
     }
     # task = "wipe"
@@ -216,36 +203,40 @@ def main(cfg: OmegaConf):
     # task = "pour"
     roll_out_length = roll_out_length_dict[task]
     
-    img_size = 224
+    img_size = 256
     num_points = 4096
-    use_waist = True
     first_init = True
     record_data = True
 
-    env = GR1DexEnvInference(obs_horizon=2, action_horizon=action_horizon, device="cpu",
+    env = UR_Inspire_EnvInference(obs_horizon=1,action_horizon=action_horizon, device="cpu",
                              use_point_cloud=use_point_cloud,
                              use_image=use_image,
                              img_size=img_size,
                              num_points=num_points,
-                             use_waist=use_waist)
+                             )
 
     
     obs_dict = env.reset(first_init=first_init)
 
     step_count = 0
-    
-    while step_count < roll_out_length:
-        with torch.no_grad():
-            action = policy(obs_dict)[0]
-            action_list = [act.numpy() for act in action]
-        
-        obs_dict = env.step(action_list)
-        step_count += action_horizon
-        print(f"step: {step_count}")
+    try:
+        while step_count < roll_out_length:
+            with torch.no_grad():
+                action = policy(obs_dict)[0]
+                action_list = [act.numpy() for act in action]
+            
+            obs_dict = env.step(action_list)
+            step_count += action_horizon
+            print(f"step: {step_count}")
+            
+    except Exception as e:
+        env.close()
+
+    env.close()
 
     if record_data:
         import h5py
-        root_dir = "/home/gr1p24ap0049/projects/gr1-learning-real/"
+        root_dir = "/home/lrz/dp_data/rollout_data"
         save_dir = root_dir + "deploy_dir"
         os.makedirs(save_dir, exist_ok=True)
         

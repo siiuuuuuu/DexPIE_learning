@@ -232,8 +232,8 @@ class StringNormalizer(DictOfTensorMixin):
 
     @classmethod
     def create_identity(cls, dtype=torch.float32):
-        scale = torch.tensor([1], dtype=dtype)
-        offset = torch.tensor([0], dtype=dtype)
+        scale = torch.tensor([1], dtype=dtype)#不缩放
+        offset = torch.tensor([0], dtype=dtype)#不偏移
         input_stats_dict = {
             'min': torch.tensor([-1], dtype=dtype),
             'max': torch.tensor([1], dtype=dtype),

@@ -3,10 +3,10 @@ if __name__ == "__main__":
     import os
     import pathlib
 
-    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)
-    sys.path.append(ROOT_DIR)
-    os.chdir(ROOT_DIR)
-
+    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)#获取根目录
+    sys.path.append(ROOT_DIR)#根目录加入sys.path确保其他模块的导入
+    os.chdir(ROOT_DIR)#更改工作目录为该根目录，确保所有相对路径都是基于该根目录的
+    
 import os
 import hydra
 import torch

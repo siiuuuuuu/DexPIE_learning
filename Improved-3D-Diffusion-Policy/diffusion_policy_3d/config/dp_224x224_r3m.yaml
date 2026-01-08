@@ -9,10 +9,10 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "debug"
 
-horizon: 16
-n_action_steps: 16
+horizon: 24
+n_action_steps: 24
 
-n_obs_steps: 2
+n_obs_steps: 1
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 keypoint_visible_rate: 1.0
@@ -29,7 +29,7 @@ policy:
   kernel_size: 5
   n_action_steps: ${n_action_steps}
   n_groups: 8
-  n_obs_steps: 2
+  n_obs_steps: ${n_obs_steps}
  
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
