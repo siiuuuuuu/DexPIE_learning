@@ -51,7 +51,7 @@ policy:
 
     model_name: 'r3m'
     pretrained: True
-    frozen: False
+    frozen: false
 
     global_pool: ''
 
@@ -89,7 +89,7 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True

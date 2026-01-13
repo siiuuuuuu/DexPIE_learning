@@ -23,6 +23,7 @@ echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"
 
 cd Improved-3D-Diffusion-Policy
 
+sudo chmod 666 /dev/ttyUSB0
 
 export HYDRA_FULL_ERROR=1 
 export CUDA_VISIBLE_DEVICES=${gpu_id}

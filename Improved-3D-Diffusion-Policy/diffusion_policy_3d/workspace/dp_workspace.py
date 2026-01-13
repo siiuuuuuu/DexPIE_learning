@@ -6,7 +6,7 @@ if __name__ == "__main__":
     ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)#获取根目录
     sys.path.append(ROOT_DIR)#根目录加入sys.path确保其他模块的导入
     os.chdir(ROOT_DIR)#更改工作目录为该根目录，确保所有相对路径都是基于该根目录的
-    
+
 import os
 import hydra
 import torch
@@ -50,7 +50,26 @@ class DPWorkspace(BaseWorkspace):
         self.ema_model: DiffusionImagePolicy = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
+        """""
+        optimizer_kwargs = {k: v for k, v in cfg.optimizer.items() if k != '_target_'}
+        
+        # 定义参数组
+        param_groups = [
+            {
+                'params': self.model.obs_encoder.parameters(),
+                'lr': optimizer_kwargs['lr'] / 10  # obsencoder的学习率设为原来的1/10
+            },
+            {
+                'params': [p for name, p in self.model.named_parameters() 
+                          if not name.startswith('obs_encoder.')],  # diffusion部分（非obsencoder部分）
+                'lr': optimizer_kwargs['lr']  # diffusion部分保持原来的学习率
+            }
+        ]
 
+        # 手动创建优化器实例
+        optimizer_class = hydra.utils.get_class(cfg.optimizer._target_)
+        self.optimizer = optimizer_class(param_groups, **{k: v for k, v in optimizer_kwargs.items() if k != 'lr'})
+        """""
         # configure training state
         self.optimizer = hydra.utils.instantiate(
             cfg.optimizer, params=self.model.parameters())
@@ -342,11 +361,11 @@ class DPWorkspace(BaseWorkspace):
 
         state_shape = cfg.task.shape_meta.obs.agent_pos.shape[0]
         img_shape = cfg.task.shape_meta.obs.image.shape
-        
+        dtype=policy.dtype
         with torch.no_grad():
             obs_dict = {
-            'agent_pos': torch.ones((1, policy.n_obs_steps, state_shape), device=device),
-            'image': torch.ones((1, policy.n_obs_steps, *img_shape), device=device),
+            'agent_pos': torch.ones((1, policy.n_obs_steps, state_shape), device=device, dtype=dtype),
+            'image': torch.ones((1, policy.n_obs_steps, *img_shape), device=device, dtype=torch.int32),
             # 'image': torch.ones((1, policy.n_obs_steps, *img_shape), device=device),
             }
             result = policy(obs_dict)

@@ -32,6 +32,10 @@ def create_indices(
         
         # range stops one idx before end
         for idx in range(min_start, max_start+1):#遍历该episode内所有采样序列的起始位置
+            if idx==0:
+                pad_flag = True
+            else:
+                pad_flag = False
             buffer_start_idx = max(idx, 0) + start_idx#限制在该episode范围内，最小为episode开始位置
             buffer_end_idx = min(idx+sequence_length, episode_length) + start_idx#最大为该episode的结束位置
             start_offset = buffer_start_idx - (idx+start_idx)
@@ -45,7 +49,7 @@ def create_indices(
                 assert(end_offset >= 0)
                 assert (sample_end_idx - sample_start_idx) == (buffer_end_idx - buffer_start_idx)
             indices.append([
-                buffer_start_idx, buffer_end_idx, 
+                buffer_start_idx, buffer_end_idx, pad_flag, 
                 sample_start_idx, sample_end_idx])
     indices = np.array(indices)#即全索引
     return indices
@@ -123,7 +127,7 @@ class SequenceSampler:
         return len(self.indices)
         
     def sample_sequence(self, idx):
-        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
+        buffer_start_idx, buffer_end_idx, pad_flag, sample_start_idx, sample_end_idx \
             = self.indices[idx]#采样序列的索引
         result = dict()
 
@@ -133,30 +137,58 @@ class SequenceSampler:
 
         for key in self.keys:
             input_arr = self.replay_buffer[key]
-            # performance optimization, avoid small allocation if possible
-            if key not in self.key_first_k:
-                sample = input_arr[buffer_start_idx:buffer_end_idx]#直接取出所需数据
-            else:
-                # performance optimization, only load used obs steps
-                n_data = buffer_end_idx - buffer_start_idx
-                k_data = min(self.key_first_k[key], n_data)
-                # fill value with Nan to catch bugs
-                # the non-loaded region should never be used
-                sample = np.full((n_data,) + input_arr.shape[1:], 
-                    fill_value=np.nan, dtype=input_arr.dtype)
-                try:
-                    sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
-                except Exception as e:
-                    import pdb; pdb.set_trace()
-            data = sample
-            if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):#需要padding
+
+            if key == 'action':
+                # 对动作数据，实现序列长度为sequence_length+1，采样从buffer_start_idx-1开始到buffer_end
+                if pad_flag:
+                    actual_buffer_start_idx=buffer_start_idx
+                    #说明为序列开头，不能再往前取了，一般开头动作幅度很小所以用后一个数据做基准也没啥事
+                else:
+                    actual_buffer_start_idx = buffer_start_idx - 1 
+                actual_buffer_end_idx = buffer_end_idx
+
+                # 获取样本数据
+                if key not in self.key_first_k:
+                    sample = input_arr[actual_buffer_start_idx:actual_buffer_end_idx]
+                
+                # 为动作数据创建sequence_length+1大小的输出数组
                 data = np.zeros(
-                    shape=(self.sequence_length,) + input_arr.shape[1:],
+                    shape=(self.sequence_length + 1,) + input_arr.shape[1:],
                     dtype=input_arr.dtype)
-                if sample_start_idx > 0:
-                    data[:sample_start_idx] = sample[0]#用第一个数据pad前面
+                if pad_flag:
+                    data[sample_start_idx+1:sample_end_idx+1] = sample
+                    data[:sample_start_idx+1] = sample[0]#用第一个数据pad前面
+                else:
+                    data[sample_start_idx:sample_end_idx+1] = sample
+
                 if sample_end_idx < self.sequence_length:
-                    data[sample_end_idx:] = sample[-1]#用最后一个数据pad后面
-                data[sample_start_idx:sample_end_idx] = sample#中间部分直接赋值
+                    data[sample_end_idx+1:] = sample[-1]#用最后一个数据pad后面
+            else:
+            # performance optimization, avoid small allocation if possible
+                if key not in self.key_first_k:
+                    sample = input_arr[buffer_start_idx:buffer_end_idx]#直接取出所需数据
+                else:
+                    # performance optimization, only load used obs steps
+                    n_data = buffer_end_idx - buffer_start_idx
+                    k_data = min(self.key_first_k[key], n_data)
+                    # fill value with Nan to catch bugs
+                    # the non-loaded region should never be used
+                    sample = np.full((n_data,) + input_arr.shape[1:], 
+                        fill_value=np.nan, dtype=input_arr.dtype)
+                    try:
+                        sample[:k_data] = input_arr[buffer_start_idx:buffer_start_idx+k_data]
+                    except Exception as e:
+                        import pdb; pdb.set_trace()
+                data = sample
+                if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):#需要padding
+                    data = np.zeros(
+                        shape=(self.sequence_length,) + input_arr.shape[1:],
+                        dtype=input_arr.dtype)
+                    if sample_start_idx > 0:
+                        data[:sample_start_idx] = sample[0]#用第一个数据pad前面
+                    if sample_end_idx < self.sequence_length:
+                        data[sample_end_idx:] = sample[-1]#用最后一个数据pad后面
+                    data[sample_start_idx:sample_end_idx] = sample#中间部分直接赋值
+
             result[key] = data
         return result

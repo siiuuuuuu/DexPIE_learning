@@ -43,7 +43,7 @@ class UR_Inspire_EnvInference:
         self.use_point_cloud = use_point_cloud
         self.use_image = use_image
         self.use_waist = use_waist
-        self.dt=1/25 #与训练时一致
+        self.dt=1/action_horizon #与训练时一致
         self.tools=MATHTOOLS()
 
         # camera
@@ -79,7 +79,6 @@ class UR_Inspire_EnvInference:
     def step(self, action_list: np.ndarray):
 
         current_arm_mat=self.tools.xyz_rotvec_to_mat(self.arm_comm.get_robot_state()['mat'])#当前TCP位姿
-        print("current_arm_mat:",self.arm_comm.get_robot_state()['mat'])
         for action_id in range(self.action_horizon):
             start_time=time.time()
 
@@ -107,8 +106,8 @@ class UR_Inspire_EnvInference:
                                     thumb_angle_2, 
                                     thumb_angle)#执行动作，非阻塞
             
-            if action_id != self.action_horizon-1:
-                time.sleep(max(0, self.dt-(time.time()-start_time)))#保持25Hz频率
+            #if action_id != self.action_horizon-1:#最后一个动作不等待
+            time.sleep(max(0, self.dt-(time.time()-start_time)))#保持25Hz频率
 
         #同步策略，执行完再获取观察
         cam_dict = self.camera()#回调获取最新一帧
@@ -187,9 +186,14 @@ def main(cfg: OmegaConf):
     else:
         use_image = False
         use_point_cloud = True
-        
-    # fetch policy model
+    
+    use_jit_model = False
+
+
     policy = workspace.get_model()
+
+    # fetch policy model
+    #policy = workspace.get_model()
     action_horizon = policy.horizon - policy.n_obs_steps + 1
 
     # pour
@@ -219,8 +223,9 @@ def main(cfg: OmegaConf):
     obs_dict = env.reset(first_init=first_init)
 
     step_count = 0
-    try:
-        while step_count < roll_out_length:
+
+    while step_count < roll_out_length:
+        try:
             with torch.no_grad():
                 action = policy(obs_dict)[0]
                 action_list = [act.numpy() for act in action]
@@ -228,9 +233,9 @@ def main(cfg: OmegaConf):
             obs_dict = env.step(action_list)
             step_count += action_horizon
             print(f"step: {step_count}")
-            
-    except Exception as e:
-        env.close()
+
+        except Exception as e:
+            env.close()
 
     env.close()
 

@@ -8,7 +8,7 @@ import torch
 import torchvision.transforms as T
 import numpy as np
 from PIL import Image
-
+import time
 from r3m import load_r3m
 
 if torch.cuda.is_available():
@@ -16,7 +16,7 @@ if torch.cuda.is_available():
 else:
     device = "cpu"
 
-r3m = load_r3m("resnet50") # resnet18, resnet34
+r3m = load_r3m("resnet18") # resnet18, resnet34
 r3m.eval()
 r3m.to(device)
 
@@ -30,5 +30,8 @@ image = np.random.randint(0, 255, (500, 500, 3))
 preprocessed_image = transforms(Image.fromarray(image.astype(np.uint8))).reshape(-1, 3, 224, 224)
 preprocessed_image.to(device) 
 with torch.no_grad():
-  embedding = r3m(preprocessed_image * 255.0) ## R3M expects image input to be [0-255]
+    start_time = time.time()
+    embedding = r3m(preprocessed_image * 255.0) ## R3M expects image input to be [0-255]
+    end_time = time.time()
+    print(f"编码时间: {end_time - start_time} 秒")
 print(embedding.shape) # [1, 2048]

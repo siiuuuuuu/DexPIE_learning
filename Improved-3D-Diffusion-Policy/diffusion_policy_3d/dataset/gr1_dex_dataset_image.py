@@ -114,11 +114,11 @@ class GR1DexDatasetImage(BaseDataset):
         if self.use_relative_action:
             arm_action=sample['action'][:,:9]
             pose=self.tools.xyz_6drot_to_mat(arm_action)
-            pose_0=pose[0]#每个序列开始时的当前位姿为参考位姿
+            pose_0=pose[0]#每个序列开始时的当前位姿为参考位姿(使用该观察的前一个动作位姿来作为参考位姿才是正确相对当前这个观察位姿)
             inv_pose_0=self.tools.se3_inverse(pose_0)
-            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)#相对于参考位姿的相对位姿
+            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose[1:])#相对于参考位姿的相对位姿
             Relative_act=self.tools.mat2xyz_6drot(Relative_pose)
-            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)
+            action=np.concatenate([Relative_act,sample['action'][1:,9:]],axis=-1)
             
 
         data = {

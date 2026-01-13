@@ -31,7 +31,7 @@ class BaseWorkspace:
         Create any resource shouldn't be serialized as local variables
         """
         pass
-
+    #保存了配置文件和具有state_dict的模型参数
     def save_checkpoint(self, path=None, tag='latest', 
             exclude_keys=None,
             include_keys=None,
