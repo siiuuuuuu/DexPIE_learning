@@ -47,17 +47,17 @@ class DiTX(nn.Module):
         output_dim: int,
         horizon: int,
         n_obs_steps: int = None,
-        cond_dim: int = 256,
-        visual_cond_len: int = 1024,
+        visual_cond_dim: int = 256,
+        visual_cond_len: int = 1024,#视觉token长度
         diffusion_timestep_embed_dim: int = 256,
         block_type: str = "DiTX",
         n_layer: int = 12,
         n_head: int = 12,
         n_emb: int = 768,
-        mlp_ratio: float = 4.0,
-        p_drop_attn: float = 0.1,
-        qkv_bias: bool = False,
-        qk_norm: bool = False,
+        mlp_ratio: float = 4.0,#隐藏层维度相对于模型嵌入维度的倍数
+        p_drop_attn: float = 0.1,#注意力层的dropout率
+        qkv_bias: bool = False,#注意力机制中线性变换是否有偏置项
+        qk_norm: bool = False,#是否对注意力机制中的查询和键算点积前进行归一化
         pre_norm_modality: bool = False,
         language_conditioned: bool=False,
         language_model: str = "t5-small",
@@ -77,12 +77,12 @@ class DiTX(nn.Module):
         self.hidden_dim = n_emb
         self.input_emb = nn.Linear(input_dim, n_emb)
         self.pos_emb = nn.Parameter(torch.zeros(1, T, n_emb))
-        self.vis_cond_obs_emb = nn.Linear(cond_dim, n_emb) # visual condition observation embedding
+        self.vis_cond_obs_emb = nn.Linear(visual_cond_dim, n_emb) # visual condition observation embedding
         self.vis_cond_pos_embed = nn.Parameter(
             torch.zeros(1, visual_cond_len * n_obs_steps, n_emb)
             )  # learnable visual condition positional embedding
         
-        # pre-norm visual modality
+        # pre-norm visual modality 对进入cross att前的视觉数据进行adaNorm
         if self.pre_norm_modality:
             # If pre-norm modality is used, apply adaLN modulation before the transformer blocks
             self.vis_norm = AdaptiveLayerNorm(
@@ -418,7 +418,8 @@ class DiTX(nn.Module):
         x = self.final_layer(x)
        
         # (B, T, output_dim)
-        x = x[:, -self.horizon:] # (B, T, out_channels)
+        x = x[:, -self.horizon:] # (B, T, out_channels),
+        #这个设计为了能使用inpaint，取后self.horizon个时间步的输出
         
         return x
 
@@ -428,29 +429,31 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sample = torch.randn(2, 10, 16).to(device)  # Batch size 2, horizon 10, input_dim 16
     timestep = torch.tensor([1, 2]).to(device)  # Example timesteps for each sample in the batch
-    target_t = torch.tensor([0.1, 0.2]).to(device)  # Example target_ts for each sample in the batch
     vis_cond = torch.randn(2, 256, 256).to(device)  # 5 time steps of visual condition
+    cond_dim = vis_cond.shape[2]
+    vis_token_num=vis_cond.shape[1]
     lang_cond = ["This is a test sentence.", "Another test sentence."]
     model = DiTX(
         input_dim=16,
         output_dim=16,
         horizon=10,
-        n_obs_steps=2,
-        cond_dim=256,
-        visual_cond_len=128,
+        n_obs_steps=1,
+        visual_cond_dim=cond_dim,
+        visual_cond_len=vis_token_num,
         diffusion_timestep_embed_dim=256,
-        diffusion_target_t_embed_dim=256,
         block_type="DiTX",
-        n_layer=2,  # Reduced for testing
+        n_layer=6,  # Reduced for testing
         n_head=8,
         n_emb=768,
         mlp_ratio=4.0,
         p_drop_attn=0.1,
-        language_conditioned=True,
+        language_conditioned=False,
         pre_norm_modality=True,
     )
+    total_params=sum(p.numel() for p in model.parameters())
+    print("Total Parameters:", total_params/1e6,"M")
     model = model.to(device)
-    output = model(sample, timestep, target_t, vis_cond, lang_cond)
+    output = model(sample, timestep, vis_cond, lang_cond)
     print("Output shape:", output.shape)  # Should be (2, 10, 768)
     assert output.shape == (2, 10, 16), "Output shape mismatch!"
     # Check if the model is initialized correctly
