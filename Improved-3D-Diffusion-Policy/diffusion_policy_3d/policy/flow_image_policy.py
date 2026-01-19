@@ -8,11 +8,11 @@ from diffusion_policy_3d.model.common.normalizer import LinearNormalizer
 from diffusion_policy_3d.policy.base_policy import BasePolicy
 from diffusion_policy_3d.common.pytorch_util import dict_apply
 from diffusion_policy_3d.common.model_util import print_params
-from diffusion_policy_3d.model.vision.timm_obs_encoder import TimmObsEncoder
+from diffusion_policy_3d.model.vision.Dino_obs_encoder import DinoObsEncoder
 from diffusion_policy_3d.model.diffusion.DiTx import DiTX
 from diffusion_policy_3d.model.common.sample_util import *
 
-class Flow_DITx_ImagePolicy(BasePolicy):
+class Flow_DIT_ImagePolicy(BasePolicy):
     def __init__(self, 
             shape_meta: dict,
             horizon, 
@@ -28,7 +28,7 @@ class Flow_DITx_ImagePolicy(BasePolicy):
             qkv_bias=False,
             qk_norm=False,
             block_type="DiTX",
-            obs_encoder: TimmObsEncoder = None,
+            obs_encoder: DinoObsEncoder = None,
             language_conditioned=False,
             sample_t_mode="beta", 
             **kwargs):
@@ -48,7 +48,7 @@ class Flow_DITx_ImagePolicy(BasePolicy):
         obs_dict = dict_apply(obs_shape_meta, lambda x: x['shape'])
         
         # create Flow_DITx model
-        obs_feature_dim = obs_encoder.output_shape()[-1]
+        obs_feature_dim = obs_encoder.embed_dim
         if obs_as_global_cond:
             input_dim = action_dim
             global_cond_dim = obs_feature_dim
@@ -57,13 +57,13 @@ class Flow_DITx_ImagePolicy(BasePolicy):
             global_cond_dim = None
 
      
-        cprint(f"[Flow_DITx_ImagePolicy] Using DiTX model", "red")
+        cprint(f"[Flow_DIT_ImagePolicy] Using DiTX model", "red")
         model = DiTX(
             input_dim=input_dim,
             output_dim=action_dim,
             horizon=horizon,
             n_obs_steps=n_obs_steps,
-            cond_dim=global_cond_dim,
+            visual_cond_dim=global_cond_dim,
             visual_cond_len=visual_cond_len,
             diffusion_timestep_embed_dim=diffusion_timestep_embed_dim,
             n_layer=n_layer,
@@ -91,7 +91,7 @@ class Flow_DITx_ImagePolicy(BasePolicy):
         self.num_inference_steps = num_inference_steps
         self.sample_t_mode = sample_t_mode
    
-        cprint(f"[ManiFlowTransformerImagePolicy] Initialized with parameters:", "yellow")
+        cprint(f"[Flow_DIT_ImagePolicy] Initialized with parameters:", "yellow")
         cprint(f"  - horizon: {self.horizon}", "yellow")
         cprint(f"  - n_action_steps: {self.n_action_steps}", "yellow")
         cprint(f"  - n_obs_steps: {self.n_obs_steps}", "yellow")
@@ -130,12 +130,18 @@ class Flow_DITx_ImagePolicy(BasePolicy):
         """
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
-        
+
+        if nobs['image'].shape[-1] == 3:
+            if len(nobs['image'].shape) == 5:
+                nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
+            if len(nobs['image'].shape) == 4:
+                nobs['image'] = nobs['image'].permute(0, 3, 1, 2)
+
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         T = self.horizon
         Da = self.action_dim
-        Do = self.obs_feature_dim
+        Do = self.obs_feature_dim#视觉编码器token维度
         To = self.n_obs_steps
 
         # build input
@@ -192,17 +198,19 @@ class Flow_DITx_ImagePolicy(BasePolicy):
             weight_decay: float,
             obs_encoder_lr: float = None,
             obs_encoder_weight_decay: float = None,
-            betas: Tuple[float, float] = (0.9, 0.95)
+            betas: Tuple[float, float] = (0.9, 0.95),
+            eps: float = 1.0e-8
         ) -> torch.optim.Optimizer:
+
         optim_groups = self.model.get_optim_groups(
             weight_decay=weight_decay)
         
         backbone_params = list()
         other_obs_params = list()
         if obs_encoder_lr is not None:
-            cprint(f"[ManiFlowTransformerImagePolicy] Use different lr for obs_encoder: {obs_encoder_lr}", "yellow")
+            cprint(f"[Flow_DIT_ImagePolicy] Use different lr for obs_encoder: {obs_encoder_lr}", "yellow")
             for key, value in self.obs_encoder.named_parameters():
-                if key.startswith('key_model_map'):
+                if key.startswith('key_model_map.'):
                     backbone_params.append(value)
                 else:
                     other_obs_params.append(value)
@@ -215,8 +223,18 @@ class Flow_DITx_ImagePolicy(BasePolicy):
                 "params": other_obs_params,
                 "weight_decay": obs_encoder_weight_decay
             })
+        else:
+            cprint(f"[Flow_DIT_ImagePolicy] Use same lr for obs_encoder: {lr}", "yellow")
+            for key, value in self.obs_encoder.named_parameters():
+                if key.startswith('key_model_map.'):
+                    backbone_params.append(value)
+            optim_groups.append({
+                "params": backbone_params,
+                "weight_decay": weight_decay,#用一样的weight_decay
+            })
+
         optimizer = torch.optim.AdamW(
-            optim_groups, lr=lr, betas=betas
+            optim_groups, lr=lr, betas=betas, eps=eps
         )
         return optimizer
     
@@ -327,6 +345,12 @@ class Flow_DITx_ImagePolicy(BasePolicy):
     def compute_loss(self, batch, **kwargs):
         # normalize input
         nobs = self.normalizer.normalize(batch['obs'])
+        #nobs['image'] /= 255.0 这里无需归一化，DinoObsEncoder中会进行归一化
+        if nobs['image'].shape[-1] == 3:
+            if len(nobs['image'].shape) == 5:
+                nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
+            if len(nobs['image'].shape) == 4:
+                nobs['image'] = nobs['image'].permute(0, 3, 1, 2)
         nactions = self.normalizer['action'].normalize(batch['action']).to(self.device)
 
         batch_size = nactions.shape[0]
@@ -348,8 +372,8 @@ class Flow_DITx_ImagePolicy(BasePolicy):
         this_nobs = dict_apply(nobs, 
             lambda x: x[:,:self.n_obs_steps,...].to(self.device))
         nobs_features = self.obs_encoder(this_nobs)
-        vis_cond = nobs_features.reshape(batch_size, -1, self.obs_feature_dim)
-        
+        #vis_cond = nobs_features.reshape(batch_size, -1, self.obs_feature_dim)
+        vis_cond = nobs_features
         flow_target_dict=self.get_flow_velocity(nactions, 
                                                     vis_cond=vis_cond,
                                                     lang_cond=lang_cond if lang_cond is not None else None)
@@ -358,21 +382,12 @@ class Flow_DITx_ImagePolicy(BasePolicy):
             timestep=flow_target_dict['t'].squeeze(),#shape [B]
             vis_cond=vis_cond,
             lang_cond=flow_target_dict['lang_cond'] if lang_cond is not None else None)
-        
-        v_flow_pred_magnitude = torch.sqrt(torch.mean(v_flow_pred ** 2)).item()
-
         """Compute flow matching loss"""
         v_flow_target = flow_target_dict['v_target']
         loss_flow = F.mse_loss(v_flow_pred, v_flow_target, reduction='none')
-        loss_flow = loss_flow * padding_mask.dtype(loss_flow.dtype)
+        loss_flow = loss_flow * padding_mask.to(dtype=loss_flow.dtype)
         loss_flow = reduce(loss_flow, 'b ... -> b (...)', 'mean')
         loss = loss_flow.mean()
         
-        loss_dict = {
-                'loss_flow': loss_flow.mean().item(),
-                'v_flow_pred_magnitude': v_flow_pred_magnitude,
-                'bc_loss': loss.item(),
-        }
-        
-        return loss, loss_dict
+        return loss
         

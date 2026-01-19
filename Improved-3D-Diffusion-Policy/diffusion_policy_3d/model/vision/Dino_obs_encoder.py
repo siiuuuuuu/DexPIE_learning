@@ -79,7 +79,7 @@ class DinoObsEncoder(ModuleAttrMixin):
     def __init__(self,
             shape_meta: dict,
             model_name: str="vit_large_patch14_dinov2",
-            out_indices: tuple=(7, 11, 15, 23),
+            out_indices: List[int]=[7, 11, 15, 23],
             transforms: list=None,
         ):
         super().__init__()
@@ -88,10 +88,10 @@ class DinoObsEncoder(ModuleAttrMixin):
         self.model_name = model_name
         rgb_keys = list()
         low_dim_keys = list()
-        key_model_map = nn.ModuleDict()
+        key_model_map = nn.ModuleDict()#存放需要训练的融合网络
         key_transform_map = nn.ModuleDict()
         key_shape_map = dict()
-        self.img_size = shape_meta['obs']['img']['shape'][1]
+        self.img_size = shape_meta['obs']['image']['shape'][1]
         #加载DINOv2模型
         self.Dino_model = load_dinov2_multiscale(self.model_name, img_size=self.img_size)
         self.embed_dim = self.Dino_model.embed_dim
@@ -110,9 +110,8 @@ class DinoObsEncoder(ModuleAttrMixin):
             transforms = [
                 torchvision.transforms.RandomCrop(size=int(image_shape[0] * ratio)),
                 torchvision.transforms.Resize(size=image_shape[0], antialias=True)#224 or 518
-            ] + transforms[1:]+[torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ]#Dino需要imagenet的归一化
+            ] + transforms[1:]+[torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
+            #Dino需要imagenet的归一化
         transform = nn.Identity() if transforms is None else torch.nn.Sequential(*transforms)
 
         for key, attr in obs_shape_meta.items():
@@ -123,7 +122,7 @@ class DinoObsEncoder(ModuleAttrMixin):
                 rgb_keys.append(key)
                 key_model_map[key] = MultiLayerFeatureFusion(num_layers=len(self.out_indices), 
                                                              feature_dim=self.embed_dim)
-                #不同相机只创建特征融合模块，DINO共用
+                #不同相机只创建自己的特征融合模块，DINO特征共用
                 this_transform = transform
                 key_transform_map[key] = this_transform
             elif type == 'low_dim':
@@ -153,6 +152,18 @@ class DinoObsEncoder(ModuleAttrMixin):
 
 
     def forward(self, obs_dict):
+        """
+        前向传播方法：处理多模态观察数据并提取特征
+        
+        Args:
+            obs_dict (Dict[str, torch.Tensor]): 观察数据字典，包含RGB图像和低维状态数据
+                - RGB图像: shape [B, T, C, H, W] 其中B为批次大小，T为时间步数
+                - 低维数据: shape [B, T, D] 其中D为特征维度
+        
+        Returns:
+            torch.Tensor: 融合后的特征张量，shape [B*T, N, embed_dim]
+                        其中N为特征序列长度，通常为257（224*224/（14*14）+1），embed_dim为嵌入维度
+        """
         features = list()
         batch_size = next(iter(obs_dict.values())).shape[0]
         
@@ -166,19 +177,15 @@ class DinoObsEncoder(ModuleAttrMixin):
             if img.shape[2:] != self.key_shape_map[key]:
                 target_H, target_W = self.key_shape_map[key][1], self.key_shape_map[key][2]#自动将输入插值到模型要求的大小
                 img = F.interpolate(img, size=(target_H, target_W), mode='bilinear', align_corners=False)
-            img = self.key_transform_map[key](img)#预处理好了
+            img = self.key_transform_map[key](img)#预处理
             # 提取DINO特征
             raw_feature = self.Dino_model.get_intermediate_layers(
                 img, 
                 n=self.out_indices,  # 提取4层
                 return_class_token=False  # 是否返回cls token
             )
-            feature = self.key_model_map[key](raw_feature)
+            feature = self.key_model_map[key](raw_feature)#融合多层DINO特征
             features.append(feature.reshape(B*T, -1, self.embed_dim))
-
-
-
-            # print("feat:", feature.device)
 
         # process lowdim input 如agent_pos
         for key in self.low_dim_keys:
