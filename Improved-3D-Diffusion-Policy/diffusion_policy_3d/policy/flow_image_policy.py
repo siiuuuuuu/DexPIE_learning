@@ -8,7 +8,8 @@ from diffusion_policy_3d.model.common.normalizer import LinearNormalizer
 from diffusion_policy_3d.policy.base_policy import BasePolicy
 from diffusion_policy_3d.common.pytorch_util import dict_apply
 from diffusion_policy_3d.common.model_util import print_params
-from diffusion_policy_3d.model.vision.Dino_obs_encoder import DinoObsEncoder
+#from diffusion_policy_3d.model.vision.transformer_obs_encoder import TransformerObsEncoder
+from diffusion_policy_3d.model.vision.timm_obs_encoder import TimmObsEncoder
 from diffusion_policy_3d.model.diffusion.DiTx import DiTX
 from diffusion_policy_3d.model.common.sample_util import *
 
@@ -28,7 +29,7 @@ class Flow_DIT_ImagePolicy(BasePolicy):
             qkv_bias=False,
             qk_norm=False,
             block_type="DiTX",
-            obs_encoder: DinoObsEncoder = None,
+            obs_encoder: TimmObsEncoder = None,
             language_conditioned=False,
             sample_t_mode="beta", 
             **kwargs):
@@ -48,7 +49,9 @@ class Flow_DIT_ImagePolicy(BasePolicy):
         obs_dict = dict_apply(obs_shape_meta, lambda x: x['shape'])
         
         # create Flow_DITx model
-        obs_feature_dim = obs_encoder.embed_dim
+        #obs_feature_dim = obs_encoder.embed_dim DINO
+        #obs_feature_dim = n_emb # CLIP
+        obs_feature_dim = int((obs_encoder.output_shape()[-1]))# R3M shape [B,512+agent_pose.shape]
         if obs_as_global_cond:
             input_dim = action_dim
             global_cond_dim = obs_feature_dim
@@ -97,7 +100,71 @@ class Flow_DIT_ImagePolicy(BasePolicy):
         cprint(f"  - n_obs_steps: {self.n_obs_steps}", "yellow")
         cprint(f"  - num_inference_steps: {self.num_inference_steps}", "yellow")
         print_params(self)
+
+    def forward(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        obs_dict = obs_dict.copy()
+            
+        # normalize input
+        nobs = self.normalizer.normalize(obs_dict)
+
+        nobs['image'] /= 255.0
+        if nobs['image'].shape[-1] == 3:
+            if len(nobs['image'].shape) == 5:
+                nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
+            if len(nobs['image'].shape) == 4:
+                nobs['image'] = nobs['image'].permute(0, 3, 1, 2) 
+        value = next(iter(nobs.values()))
+        B, To = value.shape[:2]
+        T = self.horizon
+        Da = self.action_dim
+        Do = self.obs_feature_dim
+        To = self.n_obs_steps
+
+        # build input
+        device = self.device
+        dtype = self.dtype
+
+        # handle different ways of passing observation
+        local_cond = None
+        global_cond = None
+
+            
+        # condition through global feature
+        this_nobs = dict_apply(nobs, lambda x: x[:,:self.n_obs_steps,...])
+        nobs_features = self.obs_encoder(this_nobs)
+        # reshape back to B, Do
+        vis_cond = nobs_features.reshape(B, -1, Do)
+        lang_cond = None
+
+        if self.language_conditioned:
+            # assume nobs has 'task_name' key for language condition
+            lang_cond = nobs.get('task_name', None)
+            assert lang_cond is not None, "Language goal is required"
+            
+        # empty data for action
+        cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
+
+        # run sampling
+        nsample = self.conditional_sample(
+            cond_data, 
+            vis_cond=vis_cond,
+            lang_cond=lang_cond,
+            **self.kwargs)
         
+        # unnormalize prediction
+        naction_pred = nsample[...,:Da]
+        action_pred = self.normalizer['action'].unnormalize(naction_pred)
+
+        # get action
+        start = To - 1
+        end = start + self.n_action_steps
+        action = action_pred[:,start:end]
+        
+        # get prediction
+
+
+        return action
+
     # ========= inference  ============
     def conditional_sample(self, 
             condition_data, 
@@ -130,7 +197,7 @@ class Flow_DIT_ImagePolicy(BasePolicy):
         """
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
-
+        nobs['image'] /= 255.0 #归一化到[0,1]相当于transforms.ToTensor()
         if nobs['image'].shape[-1] == 3:
             if len(nobs['image'].shape) == 5:
                 nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
@@ -226,7 +293,6 @@ class Flow_DIT_ImagePolicy(BasePolicy):
         else:
             cprint(f"[Flow_DIT_ImagePolicy] Use same lr for obs_encoder: {lr}", "yellow")
             for key, value in self.obs_encoder.named_parameters():
-                if key.startswith('key_model_map.'):
                     backbone_params.append(value)
             optim_groups.append({
                 "params": backbone_params,
@@ -345,7 +411,7 @@ class Flow_DIT_ImagePolicy(BasePolicy):
     def compute_loss(self, batch, **kwargs):
         # normalize input
         nobs = self.normalizer.normalize(batch['obs'])
-        #nobs['image'] /= 255.0 这里无需归一化，DinoObsEncoder中会进行归一化
+        nobs['image'] /= 255.0 #在obsencoder进行归一化
         if nobs['image'].shape[-1] == 3:
             if len(nobs['image'].shape) == 5:
                 nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
@@ -372,8 +438,7 @@ class Flow_DIT_ImagePolicy(BasePolicy):
         this_nobs = dict_apply(nobs, 
             lambda x: x[:,:self.n_obs_steps,...].to(self.device))
         nobs_features = self.obs_encoder(this_nobs)
-        #vis_cond = nobs_features.reshape(batch_size, -1, self.obs_feature_dim)
-        vis_cond = nobs_features
+        vis_cond = nobs_features.reshape(batch_size, -1, self.obs_feature_dim)
         flow_target_dict=self.get_flow_velocity(nactions, 
                                                     vis_cond=vis_cond,
                                                     lang_cond=lang_cond if lang_cond is not None else None)

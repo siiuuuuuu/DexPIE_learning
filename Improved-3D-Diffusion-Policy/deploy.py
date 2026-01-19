@@ -43,7 +43,8 @@ class UR_Inspire_EnvInference:
         self.use_point_cloud = use_point_cloud
         self.use_image = use_image
         self.use_waist = use_waist
-        self.dt=1/action_horizon #与训练时一致
+        dt=1/action_horizon #与训练时一致
+        self.dt=dt
         self.tools=MATHTOOLS()
 
         # camera
@@ -124,7 +125,7 @@ class UR_Inspire_EnvInference:
             'agent_pos': torch.from_numpy(agent_pos).unsqueeze(0).to(self.device),
         }
         if self.use_image:
-            obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0)
+            obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0).to(self.device)
 
         return obs_dict
     
@@ -157,7 +158,7 @@ class UR_Inspire_EnvInference:
             'agent_pos': torch.from_numpy(agent_pos).unsqueeze(0).to(self.device),
         }
         if self.use_image:
-            obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0)
+            obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0).to(self.device)
             
         return obs_dict#获取起始观察
     
@@ -180,7 +181,7 @@ def main(cfg: OmegaConf):
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
 
-    if workspace.__class__.__name__ == 'DPWorkspace':
+    if workspace.__class__.__name__ == 'DPWorkspace' or workspace.__class__.__name__ == 'FlowWorkspace':
         use_image = True
         use_point_cloud = False
     else:
@@ -223,7 +224,7 @@ def main(cfg: OmegaConf):
     obs_dict = env.reset(first_init=first_init)
 
     step_count = 0
-
+    action=policy(obs_dict)[0]
     while step_count < roll_out_length:
         try:
             with torch.no_grad():

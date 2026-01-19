@@ -342,7 +342,7 @@ class DiTX(nn.Module):
             },
         ]
         return optim_groups
-
+    
     def configure_optimizers(self, 
             learning_rate: float=1e-4, 
             weight_decay: float=1e-3,
@@ -427,24 +427,24 @@ if __name__ == "__main__":
     # Example usage of DiTX model
     torch.manual_seed(0)  # For reproducibility
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    sample = torch.randn(2, 10, 16).to(device)  # Batch size 2, horizon 10, input_dim 16
+    sample = torch.randn(2, 24, 16).to(device)  # Batch size 2, horizon 24, input_dim 16
     timestep = torch.tensor([1, 2]).to(device)  # Example timesteps for each sample in the batch
-    vis_cond = torch.randn(2, 256, 256).to(device)  # 5 time steps of visual condition
+    vis_cond = torch.randn(2, 197, 384).to(device)  # 5 time steps of visual condition
     cond_dim = vis_cond.shape[2]
     vis_token_num=vis_cond.shape[1]
     lang_cond = ["This is a test sentence.", "Another test sentence."]
     model = DiTX(
         input_dim=16,
         output_dim=16,
-        horizon=10,
+        horizon=24,
         n_obs_steps=1,
         visual_cond_dim=cond_dim,
         visual_cond_len=vis_token_num,
-        diffusion_timestep_embed_dim=256,
+        diffusion_timestep_embed_dim=128,
         block_type="DiTX",
-        n_layer=6,  # Reduced for testing
+        n_layer=10,  # Reduced for testing
         n_head=8,
-        n_emb=768,
+        n_emb=512,
         mlp_ratio=4.0,
         p_drop_attn=0.1,
         language_conditioned=False,

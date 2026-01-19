@@ -1,9 +1,9 @@
 defaults:
   - _self_
-  - task: adroit_door_image
+  - task: gr1_dex-image
 
-name: train_diffusion_unet_hybrid
-_target_: diffusion_policy_3d.workspace.dp_workspace.DPWorkspace
+name: train_DIT
+_target_: diffusion_policy_3d.workspace.flow_workspace.FlowWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -20,44 +20,47 @@ obs_as_global_cond: True
 
 use_image: true
 policy:
-  _target_: diffusion_policy_3d.policy.diffusion_image_policy.DiffusionImagePolicy
-  
-  condition_type: film
-  diffusion_step_embed_dim: 128
-  down_dims: [256, 512, 1024]
-  horizon: ${horizon}
-  kernel_size: 5
-  n_action_steps: ${n_action_steps}
-  n_groups: 8
-  n_obs_steps: ${n_obs_steps}
- 
-  noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
-    num_train_timesteps: 50
-    beta_start: 0.0001
-    beta_end: 0.02
-    beta_schedule: squaredcos_cap_v2
-    clip_sample: True
-    set_alpha_to_one: True
-    steps_offset: 0
-    prediction_type: epsilon # or sample
-  num_inference_steps: 10
-  obs_as_global_cond: true
+  _target_: diffusion_policy_3d.policy.flow_image_policy.Flow_DIT_ImagePolicy
   shape_meta: ${shape_meta}
+  horizon: ${horizon}
+  n_action_steps: ${n_action_steps}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 10
+  obs_as_global_cond: True
+  diffusion_timestep_embed_dim: 128
+  visual_cond_len: 197
+  n_layer: 12
+  n_head: 8
+  n_emb: 384
+  qkv_bias: False
+  qk_norm: True
+  block_type: "DiTX"
+  language_conditioned: False
+  sample_t_mode: "uniform"
 
   obs_encoder:
-    _target_: diffusion_policy_3d.model.vision.timm_obs_encoder.TimmObsEncoder
+    _target_: diffusion_policy_3d.model.vision.clip_obs_encoder.CLIPObsEncoder
     shape_meta: ${shape_meta}
+    global_pool: ''
+    n_emb: ${policy.n_emb}
 
-    model_name: 'r3m'
+    ##### from scratch #####
+    # model_name: 'vit_base_patch16_224'
+    # model_name: 'resnet34'
+    # model_name: 'vit_tiny_patch16_224'
+    # model_name: 'efficientnet_b0'
+    # model_name: 'efficientnet_b3'
+    # pretrained: False
+    # frozen: False
+
+    model_name: 'vit_base_patch16_clip_224.openai'
     pretrained: True
     frozen: False
 
-    global_pool: ''
+    # 'cls' or 'avg' or 'max' or 'soft_attention' or 'spatial_embedding' or 'transformer' or 'attention_pool_2d'
+    feature_aggregation: 'spatial_embedding'
 
-    feature_aggregation: null
-    position_encording: 'sinusoidal' # 'learnable' or 'sinusoidal'. it only works for transformer
-
+    # it only works for resnet. 32 (7x7) or 16 (14x14)
     downsample_ratio: 32
 
     transforms:
@@ -74,10 +77,8 @@ policy:
         saturation: 0.5
         hue: 0.08
      
-
     use_group_norm: True
     share_rgb_model: False
-    imagenet_norm: True
 
 
 ema:
@@ -89,21 +90,20 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: False
 
 optimizer:
-  _target_: torch.optim.AdamW
   lr: 1.0e-4
   betas: [0.95, 0.999]
   eps: 1.0e-8
@@ -117,7 +117,7 @@ training:
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 301
-  gradient_accumulate_every: 1
+  gradient_accumulate_every: 2
   use_ema: True
   rollout_every: 200
   checkpoint_every: 100

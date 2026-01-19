@@ -2,7 +2,11 @@
 
 #   bash scripts/deploy_policy.sh idp3 gr1_dex-3d 0913_example
 #   bash scripts/deploy_policy.sh dp_224x224_r3m gr1_dex-image 0913_example
+#   bash scripts/deploy_policy.sh flow_224x224_Dino gr1_dex-image 0114_example
+#   bash scripts/deploy_policy.sh flow_224x224_transformer gr1_dex-image 0115
 
+wandb_mode=online
+#dataset_path=/home/ze/projects/Improved-3D-Diffusion-Policy/training_data_example
 dataset_path=/home/lrz/dp_data/train_data
 
 

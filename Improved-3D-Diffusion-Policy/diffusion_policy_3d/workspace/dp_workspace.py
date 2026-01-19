@@ -398,9 +398,8 @@ class DPWorkspace(BaseWorkspace):
         
         if ckpt_path is None:
             tag = "latest"
-            # tag = "best"
+            #tag = "best"
             lastest_ckpt_path = self.get_checkpoint_path(tag=tag)
-            
             if lastest_ckpt_path.is_file():
                 cprint(f"Resuming from checkpoint {lastest_ckpt_path}", 'magenta')
                 self.load_checkpoint(path=lastest_ckpt_path)
