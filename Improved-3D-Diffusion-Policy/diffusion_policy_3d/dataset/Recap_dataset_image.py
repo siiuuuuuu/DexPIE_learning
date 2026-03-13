@@ -12,7 +12,7 @@ import diffusion_policy_3d.model.vision_3d.point_process as point_process
 from termcolor import cprint
 from scipy.ndimage import zoom
 
-class ValueDatasetImage(BaseDataset):
+class RecapDatasetImage(BaseDataset):
     def __init__(self,
             zarr_path, 
             horizon=1,
@@ -26,25 +26,30 @@ class ValueDatasetImage(BaseDataset):
             task_name=None,
             use_act_normal=False,
             use_img=True,
+            use_wrist_img=False,
             use_depth=False,
             use_relative_action=True,
             ):
         super().__init__()
-        cprint(f'Loading Dataset from {zarr_path}', 'green')
+        cprint(f'Loading GR1DexDataset from {zarr_path}', 'green')
         self.task_name = task_name
         self.use_act_normal = use_act_normal
         self.use_img = use_img
+        self.use_wrist_img = use_wrist_img
         self.use_depth = use_depth
         self.use_relative_action = use_relative_action
         self.n_obs_steps = n_obs_steps
         self.n_action_steps = n_action_steps
         self.tools=MATHTOOLS()
+
         buffer_keys = [
             'state', 
-            'action',]
-        
+            'action',
+            'intervention',] 
         if self.use_img:
-            buffer_keys.append('img')
+            buffer_keys.append('img') #对齐数据采集的img
+        if self.use_wrist_img:
+            buffer_keys.append('wrist_img')
         if self.use_depth:
             buffer_keys.append('depth')
 
@@ -94,6 +99,8 @@ class ValueDatasetImage(BaseDataset):
 
         if self.use_img:
             normalizer['image'] = SingleFieldLinearNormalizer.create_identity()
+        if self.use_wrist_img:
+            normalizer['wrist_img'] = SingleFieldLinearNormalizer.create_identity()
         if self.use_depth:
             normalizer['depth'] = SingleFieldLinearNormalizer.create_identity()
         
@@ -105,20 +112,36 @@ class ValueDatasetImage(BaseDataset):
         return len(self.sampler)
 
     def _sample_to_data(self, sample):
-        agent_pos = sample['state'][:,].astype(np.float32)#只取所需观察即前n_obs_steps个
-
+        valid_mask = sample['mask']
+        valid_steps = int(valid_mask.sum())
+        if valid_steps > 0:
+            intervention_num = int(sample['intervention'][valid_mask].sum())
+        else:
+            intervention_num = 0
+        intervent_positive = np.array(
+            intervention_num > (valid_steps / 3.0), dtype=np.bool_
+        )  # 只有干预步数大于有效步长度1/3时才为True（一般邻近自主步就是负样本），后续输出shape [B]
+        agent_pos = sample['state'][[0,-1],:6].astype(np.float32)
+        current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
+        #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了
         if self.use_img:
-            image = sample['img'][:self.n_obs_steps,].astype(np.float32)
+            image = sample['img'][[0,-1],].astype(np.float32) #取第一个和最后一个图像，两个价值来计算优势值
+        if self.use_wrist_img:
+            wrist_img = sample['wrist_img'][[0,-1],].astype(np.float32)
         if self.use_depth:
-            depth = sample['depth'][:self.n_obs_steps,].astype(np.float32)
+            depth = sample['depth'][[0,-1],].astype(np.float32)
         if self.use_relative_action:
             arm_action=sample['action'][:,:9]
             pose=self.tools.xyz_6drot_to_mat(arm_action)
-            pose_0=pose[0]#每个序列开始时的当前位姿为参考位姿(使用该观察的前一个动作位姿来作为参考位姿才是正确相对当前这个观察位姿)
-            inv_pose_0=self.tools.se3_inverse(pose_0)
-            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose[1:])#相对于参考位姿的相对位姿
+            if current_agent_pose.shape[-1]<6: #如果没有提供当前位姿，就用第一个动作位姿作为参考位姿
+                pose_0=pose[0]#每个序列开始时的当前动作位姿为参考位姿
+                inv_pose_0=self.tools.se3_inverse(pose_0)
+            else:
+                pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])#其是xyz+rotvec格式
+                inv_pose_0=self.tools.se3_inverse(pose_0)
+            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)#相对于参考位姿的相对位姿
             Relative_act=self.tools.mat2xyz_6drot(Relative_pose)
-            action=np.concatenate([Relative_act,sample['action'][1:,9:]],axis=-1)
+            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)#相对位姿和绝对关节角
             
 
         data = {
@@ -128,14 +151,16 @@ class ValueDatasetImage(BaseDataset):
         
         if self.use_img:
             data['obs']['image'] = image
+        if self.use_wrist_img:
+            data['obs']['wrist_img'] = wrist_img
         if self.use_depth:
             data['obs']['depth'] = depth
         if self.use_relative_action:
             data['action']=action.astype(np.float32)
         
         data['mask']=sample["mask"]
-
-        return data #四元组 这里就应该obs只使用前n_obs个不然内存占用
+        data['intervention']=intervent_positive
+        return data 
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.sampler.sample_sequence(idx)

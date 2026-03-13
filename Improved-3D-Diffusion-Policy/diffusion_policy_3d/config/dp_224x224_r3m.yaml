@@ -76,7 +76,7 @@ policy:
      
 
     use_group_norm: True
-    share_rgb_model: False
+    share_rgb_model: True
     imagenet_norm: True
 
 
@@ -96,7 +96,7 @@ dataloader:
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: False
   pin_memory: True
@@ -146,7 +146,7 @@ checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 1
+    k: 2
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False

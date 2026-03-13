@@ -37,18 +37,18 @@ class UR_Inspire_EnvInference:
     def __init__(self, obs_horizon=1, action_horizon=24, device="gpu",
                 use_point_cloud=False, use_image=True, img_size=256,
                  num_points=4096,
-                 use_waist=False):
+                 use_wrist_img=False):
         
         # obs/action
         self.use_point_cloud = use_point_cloud
         self.use_image = use_image
-        self.use_waist = use_waist
+        self.use_wrist_img = use_wrist_img
         dt=1/action_horizon #与训练时一致
         self.dt=dt
         self.tools=MATHTOOLS()
 
         # camera
-        self.camera = MultiRealSense(use_front_cam=True, use_right_cam=False, # by default we use single cam. but we also support multi-cam
+        self.camera = MultiRealSense(use_front_cam=True, use_right_cam=use_wrist_img, # by default we use single cam. but we also support multi-cam
                             front_num_points=num_points,
                             img_size=img_size)
         print("camera init")
@@ -88,6 +88,7 @@ class UR_Inspire_EnvInference:
             arm_mat=np.dot(current_arm_mat,relative_arm_mat)#叠加相对位姿
 
             arm_action=self.tools.mat2xyz_rotvec(arm_mat)#UR格式
+
             hand_action=act[9:]*1000 #反归一化到0-1000
 
             hand_action=np.clip(hand_action, 0, 1000)
@@ -113,25 +114,34 @@ class UR_Inspire_EnvInference:
         #同步策略，执行完再获取观察
         cam_dict = self.camera()#回调获取最新一帧
         self.color_array.append(cam_dict['front_color'])
+        if self.use_wrist_img:
+            self.wrist_color_array.append(cam_dict['right_color'])
+
         env_qpos =self.arm_comm.get_robot_state()['joint_positions']
         self.env_qpos_array.append(env_qpos)
             
         
         agent_pos = np.stack(self.env_qpos_array[-self.obs_horizon:], axis=0)
 
-        obs_img = np.stack(self.color_array[-self.obs_horizon:], axis=0)
+        obs_img = np.stack(self.color_array[-self.obs_horizon:], axis=0)#shape已经是T,H,W,C 后面再加B对齐数据集的格式
+        if self.use_wrist_img:
+            obs_wrist_img = np.stack(self.wrist_color_array[-self.obs_horizon:], axis=0)
             
         obs_dict = {
             'agent_pos': torch.from_numpy(agent_pos).unsqueeze(0).to(self.device),
         }
         if self.use_image:
             obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0).to(self.device)
+        if self.use_wrist_img:
+            obs_dict['wrist_img'] = torch.from_numpy(obs_wrist_img).permute(0, 3, 1, 2).unsqueeze(0).to(self.device)
 
         return obs_dict
     
     def reset(self, first_init=True):
         # init buffer
         self.color_array, self.depth_array, self.cloud_array = [], [], []
+        if self.use_wrist_img:
+            self.wrist_color_array = []
         self.env_qpos_array = []
         self.action_array = []
 
@@ -147,18 +157,24 @@ class UR_Inspire_EnvInference:
         # ======== INIT ==========
         cam_dict = self.camera()#回调获取最新一帧
         self.color_array.append(cam_dict['front_color'])
-
+        if self.use_wrist_img:
+            self.wrist_color_array.append(cam_dict['right_color'])
+        
         env_qpos =self.arm_comm.get_robot_state()['joint_positions']
         self.env_qpos_array.append(env_qpos)
                     
 
         agent_pos = np.stack([self.env_qpos_array[-1]]*self.obs_horizon, axis=0)
         obs_img = np.stack([self.color_array[-1]]*self.obs_horizon, axis=0)
+        if self.use_wrist_img:
+            obs_wrist_img = np.stack([self.wrist_color_array[-1]]*self.obs_horizon, axis=0)
         obs_dict = {
             'agent_pos': torch.from_numpy(agent_pos).unsqueeze(0).to(self.device),
-        }
+        }#对齐数据集的输出数据格式 agent_pos image wrist_img
         if self.use_image:
             obs_dict['image'] = torch.from_numpy(obs_img).permute(0, 3, 1, 2).unsqueeze(0).to(self.device)
+        if self.use_wrist_img:
+            obs_dict['wrist_img'] = torch.from_numpy(obs_wrist_img).permute(0, 3, 1, 2).unsqueeze(0).to(self.device)
             
         return obs_dict#获取起始观察
     
@@ -181,13 +197,15 @@ def main(cfg: OmegaConf):
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
 
-    if workspace.__class__.__name__ == 'DPWorkspace' or workspace.__class__.__name__ == 'FlowWorkspace':
-        use_image = True
-        use_point_cloud = False
-    else:
-        use_image = False
-        use_point_cloud = True
     
+    use_image = True
+    use_point_cloud = False
+    if cfg.task.dataset.use_wrist_img:
+        use_wrist_img = True
+    else:
+        use_wrist_img = False
+
+    use_wrist_img = False
     use_jit_model = False
 
 
@@ -211,13 +229,14 @@ def main(cfg: OmegaConf):
     img_size = 256
     num_points = 4096
     first_init = True
-    record_data = True
+    record_data = False
 
     env = UR_Inspire_EnvInference(obs_horizon=1,action_horizon=action_horizon, device="cpu",
                              use_point_cloud=use_point_cloud,
                              use_image=use_image,
                              img_size=img_size,
                              num_points=num_points,
+                             use_wrist_img=use_wrist_img,
                              )
 
     

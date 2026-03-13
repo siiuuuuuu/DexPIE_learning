@@ -1,8 +1,6 @@
 import torch
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+
 class UniformDiscretizer:
     """将连续值均匀离散化到固定数量的bins"""
     
@@ -103,53 +101,4 @@ class UniformDiscretizer:
         :param distribution: 概率分布 [batch_size, num_bins]
         :return: 连续值 [batch_size]
         """
-        return torch.sum(distribution * self.bin_centers.unsqueeze(0), dim=-1)
-
-
-# 使用示例
-discretizer = UniformDiscretizer(num_bins=201, v_min=-1.0, v_max=0)
-
-# 示例1：单个值
-value = torch.tensor([-0.5])
-bin_idx = discretizer.discretize(value)  # 返回 tensor(5)
-recovered = discretizer.undiscretize(bin_idx)  # 返回 tensor(-0.5)
-print(f"value: {value}, bin_idx: {bin_idx}, recovered: {recovered}")
-one_hot = discretizer.discretize_to_distribution(value)
-print(f"One-Hot distribution shape: {one_hot.shape}")
-gaussian_dist = discretizer.discretize_to_gs_distribution(value, gaussian_std=0.8)
-print(f"Gaussian distribution shape: {gaussian_dist.shape}")
-expected_value = discretizer.undiscretize_distribution(gaussian_dist)
-print(f"Expected value from Gaussian distribution: {expected_value.item():.4f}")
-print(f"Original value: {value.item():.4f}")
-print(f"Difference: {abs(expected_value.item() - value.item()):.4f}")
-# 绘制one-hot分布
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-
-# 绘制one-hot分布
-one_hot_cpu = one_hot.cpu().numpy()[0]  # 取第一个样本并转到CPU
-ax1.plot(one_hot_cpu, label='One-Hot Distribution', marker='o', markersize=3)
-ax1.set_title('One-Hot Distribution')
-ax1.set_xlabel('Bin Index')
-ax1.set_ylabel('Probability')
-ax1.grid(True, alpha=0.3)
-
-gaussian_cpu = gaussian_dist.cpu().numpy()[0]  # 取第一个样本并转到CPU
-ax2.plot(gaussian_cpu, label='Gaussian Distribution', color='red', linewidth=2)
-ax2.set_title('Gaussian Distribution (std=0.5)')
-ax2.set_xlabel('Bin Index')
-ax2.set_ylabel('Probability')
-ax2.grid(True, alpha=0.3)
-
-plt.tight_layout()
-
-
-# 保存图片而不是显示
-plt.savefig('/home/lrz/project/Improved-3D-Diffusion-Policy/distribution_comparison.png')
-print("Distribution comparison plot saved as 'distribution_comparison.png'")
-
-plt.close()
-
-print(f"\nGaussian distribution stats:")
-print(f"Sum: {gaussian_dist.sum().item():.4f}")
-print(f"Max value: {gaussian_dist.max().item():.4f}")
-print(f"Values > 0.001: {(gaussian_dist > 0.001).sum().item()}")
+        return torch.sum(distribution * self.bin_centers.unsqueeze(0).to(distribution.device), dim=-1)

@@ -4,9 +4,9 @@ import rtde_receive
 
 class UR_Comm:
     def __init__(self, ip="192.168.3.6", workspace_limits={
-        'x': [-0.8, 0.8],
-        'y': [-0.8, 0.8], 
-        'z': [0, 0.8]},
+        'x': [-1, 1],
+        'y': [-1, 1], 
+        'z': [0, 1]},
         servo_speed=0.005,
         servo_acceleration=0.005,
         dt=1.0/25,
@@ -29,7 +29,7 @@ class UR_Comm:
         self.lookahead_time = lookahead_time      # 平滑时间 (0.03-0.2之间)
         self.gain = gain                # 比例增益 (100-2000之间)
 
-        self.initial_pose =[0.248,0.1212,0.3978,1.16,1.25,1.28]
+        self.initial_pose =[0.248,0.1212,0.3978,1.16,1.25,1.28] #210
 
     def cleanup(self):
         """Cleanup RTDE connections"""
@@ -38,7 +38,7 @@ class UR_Comm:
         if rtde_c and self.rtde_c.isConnected():
             try:
                 rtde_c.servoStop()
-                rtde_c.stopScript()
+                #rtde_c.stopScript()
             except Exception as e:
                 print(f"Failed to stop servo: {e}")
             finally:

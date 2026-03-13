@@ -17,7 +17,7 @@ shape_meta: &shape_meta #可以在其它地方引用这整个层级参数，包�
 
 
 dataset:
-  _target_: diffusion_policy_3d.dataset.gr1_dex_dataset_image.GR1DexDatasetImage
+  _target_: diffusion_policy_3d.dataset.Recap_dataset_image.RecapDatasetImage
   zarr_path: data/box_zarr
   horizon: ${horizon}
   n_obs_steps: ${n_obs_steps}
@@ -26,7 +26,7 @@ dataset:
   pad_after: ${eval:'${n_action_steps}-1'}
   seed: 42
   val_ratio: 0.00
-  max_train_episodes: 90
+  max_train_episodes: 500
   use_act_normal: False
   use_img: true
   use_wrist_img: false

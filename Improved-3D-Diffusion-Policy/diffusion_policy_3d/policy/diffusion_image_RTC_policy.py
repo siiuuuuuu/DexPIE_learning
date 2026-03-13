@@ -16,13 +16,15 @@ from termcolor import cprint
 from diffusion_policy_3d.model.vision.timm_obs_encoder import TimmObsEncoder
 import numpy as np
 
-class DiffusionImagePolicy(BasePolicy):
+class DiffusionImageRTCPolicy(BasePolicy):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
             horizon, 
             n_action_steps, 
             n_obs_steps,
+            max_latency_steps=3,
+            cond_dropout_prob=0.75,
             num_inference_steps=None,
             obs_as_global_cond=True,
             crop_shape=(76, 76),
@@ -38,6 +40,9 @@ class DiffusionImagePolicy(BasePolicy):
             **kwargs):
         super().__init__()
 
+        self.max_latency_steps = max_latency_steps
+        assert 0.0 <= cond_dropout_prob <= 1.0
+        self.cond_dropout_prob = cond_dropout_prob
         self.use_depth = use_depth
         self.use_depth_only = use_depth_only
         cprint(f"use_depth: {use_depth}, use_depth_only: {use_depth_only}", 'red')
@@ -106,7 +111,13 @@ class DiffusionImagePolicy(BasePolicy):
 
     def forward(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         obs_dict = obs_dict.copy()
-            
+        exc_action = obs_dict.pop("exc_action", None) #将被执行的动作作为条件，需要已经是作为当前观测下的相对动作，并匹配格式
+        if exc_action is None:
+            exc_horizon = 0
+        else:
+            exc_horizon = exc_action.shape[1]
+            assert exc_horizon <=self.max_latency_steps, "exc_horizon must be less than max_latency_steps"
+
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
 
@@ -156,6 +167,9 @@ class DiffusionImagePolicy(BasePolicy):
         # empty data for action
         cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
         cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
+        if exc_horizon > 0:
+            cond_data[:,:exc_horizon,...] = exc_action
+            cond_mask[:,:exc_horizon,...] = True #注入条件
 
         # run sampling
         nsample = self.conditional_sample(
@@ -170,7 +184,7 @@ class DiffusionImagePolicy(BasePolicy):
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
-        start = To - 1
+        start = To - 1 + exc_horizon
         end = start + self.n_action_steps
         action = action_pred[:,start:end]
         
@@ -365,17 +379,27 @@ class DiffusionImagePolicy(BasePolicy):
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps, 
             (bsz,), device=trajectory.device
-        ).long()
+        ).long() #因为后续使用的是全局条件所以没必要每个时间步都有一个timestep
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_trajectory = self.noise_scheduler.add_noise(
             trajectory, noise, timesteps)
         
+        delay = torch.randint(
+            0, self.max_latency_steps + 1, (bsz,),
+            device=trajectory.device, dtype=torch.int64
+        )
+        keep_cond = torch.rand(bsz, device=trajectory.device) >= self.cond_dropout_prob
+        prefix_mask = torch.arange(horizon, device=trajectory.device).unsqueeze(0) < delay.unsqueeze(1)#[B,T]
+        prefix_mask = prefix_mask & keep_cond.unsqueeze(1)
+        noisy_trajectory[prefix_mask] = cond_data[prefix_mask]#使用真实动作替换delay位置的加噪动作
+
         # compute loss mask
         loss_mask = ~condition_mask#作为条件的位置为0，让该位置的loss为0
         if "mask"in batch:
             padding_mask=batch['mask'].unsqueeze(-1).to(trajectory.device)#[B,T,1] 为1的位置为有效数据
             loss_mask = loss_mask & padding_mask
+        loss_mask = loss_mask & ~prefix_mask.unsqueeze(-1)#前缀位置不计算loss
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
 

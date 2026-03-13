@@ -1,0 +1,35 @@
+name: box
+
+shape_meta: &shape_meta #可以在其它地方引用这整个层级参数，包括obs和action，而不只是一个参数
+  # acceptable types: rgb, low_dim
+  obs:
+    image:
+      shape: [3, 224, 224]
+      type: rgb
+      horizon: ${n_obs_steps}
+    #wrist_img:
+    #  shape: [3, 224, 224]
+    #  type: rgb
+    #  horizon: ${n_obs_steps}
+    agent_pos:
+      shape: [6]
+      type: low_dim
+      horizon: ${n_obs_steps}
+  target:
+    shape: ${num_bins}
+    horizon: ${n_obs_steps}
+
+
+dataset:
+  _target_: diffusion_policy_3d.dataset.value_dataset_image.ValueDatasetImage
+  zarr_path : data/box_zarr
+  seed: 42
+  val_ratio: 0.0
+  max_train_episodes: 1000
+  use_img: True
+  use_wrist_img: False
+  max_length: ${max_length}
+  fail_rate: ${fail_rate}
+  num_bins: ${num_bins}
+  v_min: ${v_min}
+  v_max: ${v_max}

@@ -16,7 +16,7 @@ if torch.cuda.is_available():
 else:
     device = "cpu"
 
-r3m = load_r3m("resnet18") # resnet18, resnet34
+r3m = load_r3m("resnet34") # resnet18, resnet34
 r3m.eval()
 r3m.to(device)
 

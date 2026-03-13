@@ -49,7 +49,7 @@ class Flow_DIT_ImagePolicy(BasePolicy):
         obs_dict = dict_apply(obs_shape_meta, lambda x: x['shape'])
         
         # create Flow_DITx model
-        #obs_feature_dim = obs_encoder.embed_dim DINO
+        #obs_feature_dim = obs_encoder.embed_dim #DINO
         #obs_feature_dim = n_emb # CLIP
         obs_feature_dim = int((obs_encoder.output_shape()[-1]))# R3M shape [B,512+agent_pose.shape]
         if obs_as_global_cond:

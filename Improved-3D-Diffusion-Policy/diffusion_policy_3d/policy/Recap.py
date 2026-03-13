@@ -16,7 +16,7 @@ from termcolor import cprint
 from diffusion_policy_3d.model.vision.timm_obs_encoder import TimmObsEncoder
 import numpy as np
 
-class DiffusionImagePolicy(BasePolicy):
+class RecapPolicy(BasePolicy):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
@@ -31,6 +31,8 @@ class DiffusionImagePolicy(BasePolicy):
             kernel_size=5,
             n_groups=8,
             condition_type='film',
+            positive_cond_drop_prob=0.3,
+            positive_cfg_scale=2,
             use_depth=False,
             use_depth_only=False,
             obs_encoder: TimmObsEncoder = None,
@@ -67,6 +69,7 @@ class DiffusionImagePolicy(BasePolicy):
 
 
         obs_feature_dim = np.prod(obs_encoder.output_shape())
+        obs_feature_dim += diffusion_step_embed_dim #加上positive_embedding的维度
        
         model = ConditionalUnet1D(
             input_dim=action_dim,
@@ -78,7 +81,7 @@ class DiffusionImagePolicy(BasePolicy):
             n_groups=n_groups,
             condition_type=condition_type,
         )
-
+        self.is_positive_embedding = nn.Embedding(2, diffusion_step_embed_dim)
         self.obs_encoder = obs_encoder
         self.model = model
         self.noise_scheduler = noise_scheduler
@@ -96,6 +99,8 @@ class DiffusionImagePolicy(BasePolicy):
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
+        self.positive_cond_drop_prob = positive_cond_drop_prob
+        self.positive_cfg_scale = positive_cfg_scale
         self.kwargs = kwargs
 
         if num_inference_steps is None:
@@ -149,8 +154,15 @@ class DiffusionImagePolicy(BasePolicy):
         # condition through global feature
         this_nobs = dict_apply(nobs, lambda x: x[:,:self.n_obs_steps,...])
         nobs_features = self.obs_encoder(this_nobs)
-        # reshape back to B, Do
-        global_cond = nobs_features.reshape(B, -1)
+        # reshape back to B, Do and append positive condition embedding for inference
+        base_global_cond = nobs_features.reshape(B, -1)
+        positive_embedding = self.is_positive_embedding(
+            torch.ones(B, device=base_global_cond.device, dtype=torch.long)
+        ).reshape(B, -1) #使用恒为1的positive_embedding作为条件（好的动作）
+        global_cond = torch.cat([base_global_cond, positive_embedding], dim=-1)
+        global_cond_uncond = torch.cat(
+            [base_global_cond, torch.zeros_like(positive_embedding)], dim=-1
+        ) #用0作为空条件，当作为无条件输入
      
             
         # empty data for action
@@ -163,6 +175,8 @@ class DiffusionImagePolicy(BasePolicy):
             cond_mask,
             local_cond=local_cond,
             global_cond=global_cond,
+            global_cond_uncond=global_cond_uncond,
+            cfg_scale=self.positive_cfg_scale,
             **self.kwargs)
         
         # unnormalize prediction
@@ -184,6 +198,8 @@ class DiffusionImagePolicy(BasePolicy):
     def conditional_sample(self, 
             condition_data, condition_mask,
             local_cond=None, global_cond=None,
+            global_cond_uncond=None,
+            cfg_scale=1.0,
             generator=None,
             # keyword arguments to scheduler.step
             **kwargs
@@ -205,8 +221,22 @@ class DiffusionImagePolicy(BasePolicy):
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. predict model output
-            model_output = model(trajectory, t, 
-                local_cond=local_cond, global_cond=global_cond)
+            if global_cond_uncond is not None and cfg_scale != 1.0:
+                # Parallel CFG: concatenate unconditional and conditional branches in one batch.
+                model_input = torch.cat([trajectory, trajectory], dim=0)
+                if local_cond is not None:
+                    local_cond_input = torch.cat([local_cond, local_cond], dim=0)
+                else:
+                    local_cond_input = None
+                global_cond_input = torch.cat([global_cond_uncond, global_cond], dim=0)
+                model_output_pair = model(
+                    model_input, t, local_cond=local_cond_input, global_cond=global_cond_input
+                )
+                model_output_uncond, model_output_cond = torch.chunk(model_output_pair, 2, dim=0)
+                model_output = model_output_uncond + cfg_scale * (model_output_cond - model_output_uncond)
+            else:
+                model_output = model(trajectory, t, 
+                    local_cond=local_cond, global_cond=global_cond)
 
             # 3. compute previous image: x_t -> x_t-1
             trajectory = scheduler.step(
@@ -265,8 +295,15 @@ class DiffusionImagePolicy(BasePolicy):
             # condition through global feature
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...])
             nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, Do
-            global_cond = nobs_features.reshape(B, -1)
+            # reshape back to B, Do and append positive condition embedding for inference
+            base_global_cond = nobs_features.reshape(B, -1)
+            positive_embedding = self.is_positive_embedding(
+                torch.ones(B, device=base_global_cond.device, dtype=torch.long)
+            ).reshape(B, -1)
+            global_cond = torch.cat([base_global_cond, positive_embedding], dim=-1)
+            global_cond_uncond = torch.cat(
+                [base_global_cond, torch.zeros_like(positive_embedding)], dim=-1
+            )
             # empty data for action
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
@@ -280,6 +317,7 @@ class DiffusionImagePolicy(BasePolicy):
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
             cond_data[:,:To,Da:] = nobs_features
             cond_mask[:,:To,Da:] = True
+            global_cond_uncond = None
 
         # run sampling
         nsample = self.conditional_sample(
@@ -287,6 +325,8 @@ class DiffusionImagePolicy(BasePolicy):
             cond_mask,
             local_cond=local_cond,
             global_cond=global_cond,
+            global_cond_uncond=global_cond_uncond,
+            cfg_scale=self.positive_cfg_scale,
             **self.kwargs)
         
         # unnormalize prediction
@@ -308,24 +348,26 @@ class DiffusionImagePolicy(BasePolicy):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def compute_loss(self, batch):
+    def compute_loss(self, batch, is_positive : torch.BoolTensor, obs_preprocessed: bool = False):
+        # is_positive: shape [B]
         # normalize input
         assert 'valid_mask' not in batch
         nobs = self.normalizer.normalize(batch['obs'])
-        # normalize image by hand
-        nobs['image'] /= 255.0
-        if nobs['image'].shape[-1] == 3:
-            if len(nobs['image'].shape) == 5:
-                nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
-            if len(nobs['image'].shape) == 4:
-                nobs['image'] = nobs['image'].permute(0, 3, 1, 2)
-        if "wrist_img" in nobs:
-            nobs["wrist_img"] /= 255.0
-            if nobs["wrist_img"].shape[-1] == 3:
-                if len(nobs["wrist_img"].shape) == 5:
-                    nobs["wrist_img"] = nobs["wrist_img"].permute(0, 1, 4, 2, 3)
-                if len(nobs["wrist_img"].shape) == 4:
-                    nobs["wrist_img"] = nobs["wrist_img"].permute(0, 3, 1, 2)
+        # normalize image by hand (skip when workspace already prepared obs)
+        if not obs_preprocessed:
+            nobs['image'] /= 255.0
+            if nobs['image'].shape[-1] == 3:
+                if len(nobs['image'].shape) == 5:
+                    nobs['image'] = nobs['image'].permute(0, 1, 4, 2, 3)
+                if len(nobs['image'].shape) == 4:
+                    nobs['image'] = nobs['image'].permute(0, 3, 1, 2)
+            if "wrist_img" in nobs:
+                nobs["wrist_img"] /= 255.0
+                if nobs["wrist_img"].shape[-1] == 3:
+                    if len(nobs["wrist_img"].shape) == 5:
+                        nobs["wrist_img"] = nobs["wrist_img"].permute(0, 1, 4, 2, 3)
+                    if len(nobs["wrist_img"].shape) == 4:
+                        nobs["wrist_img"] = nobs["wrist_img"].permute(0, 3, 1, 2)
         if self.use_depth and not self.use_depth_only:
             nobs['image'] = torch.cat([nobs['image'], nobs['depth'].unsqueeze(-3)], dim=-3)
         if self.use_depth and self.use_depth_only:
@@ -333,7 +375,14 @@ class DiffusionImagePolicy(BasePolicy):
         nactions = self.normalizer['action'].normalize(batch['action'])
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
-
+        intervention = batch["intervention"]
+        is_positive = is_positive.bool() | intervention.to(is_positive.device)
+        positive_embedding = self.is_positive_embedding(is_positive.long()).reshape(batch_size,-1)# shape [B, diffusion_step_embed_dim]
+        # Classifier-Free Guidance training: randomly drop positive condition.
+        if self.training and self.positive_cond_drop_prob > 0:
+            drop_mask = (torch.rand(batch_size, 1, device=positive_embedding.device)
+                         < self.positive_cond_drop_prob)
+            positive_embedding = positive_embedding.masked_fill(drop_mask, 0.0) #用全0作为空条件
         # handle different ways of passing observation
         local_cond = None
         global_cond = None
@@ -342,10 +391,10 @@ class DiffusionImagePolicy(BasePolicy):
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
-                lambda x: x[:,:self.n_obs_steps,...])
+                lambda x: x[:,:self.n_obs_steps,...]) #只用第一个观测（因为这里数据集会包含最后一个观测，所以必须要取第一个）
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
-            global_cond = nobs_features.reshape(batch_size, -1)
+            global_cond = torch.cat([nobs_features.reshape(batch_size, -1), positive_embedding], dim=-1)# cat positive_embedding到global_cond中
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x)
@@ -374,7 +423,7 @@ class DiffusionImagePolicy(BasePolicy):
         # compute loss mask
         loss_mask = ~condition_mask#作为条件的位置为0，让该位置的loss为0
         if "mask"in batch:
-            padding_mask=batch['mask'].unsqueeze(-1).to(trajectory.device)#[B,T,1] 为1的位置为有效数据
+            padding_mask=batch['mask'].unsqueeze(-1).to(trajectory.device) #[B,T,1] 为1的位置为有效数据
             loss_mask = loss_mask & padding_mask
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]

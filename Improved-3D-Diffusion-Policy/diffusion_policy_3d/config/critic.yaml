@@ -1,77 +1,45 @@
 defaults:
   - _self_
-  - task: gr1_dex-image
+  - task: value_image
 
-name: train_DIT
-_target_: diffusion_policy_3d.workspace.flow_workspace.FlowWorkspace
+name: train_critic
+_target_: diffusion_policy_3d.workspace.critic_workspace.CriticWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "debug"
 
-horizon: 24
-n_action_steps: 24
-
 n_obs_steps: 1
-n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
-keypoint_visible_rate: 1.0
-obs_as_global_cond: True
-
+num_bins: 201
+v_min: -1
+v_max:  0
+max_length: 1000
+fail_rate: 0.1
 use_image: true
 policy:
-  _target_: diffusion_policy_3d.policy.flow_image_policy.Flow_DIT_ImagePolicy
+  _target_: diffusion_policy_3d.policy.value_critic.ValueCritic
   shape_meta: ${shape_meta}
-  horizon: ${horizon}
-  n_action_steps: ${n_action_steps}
-  n_obs_steps: ${n_obs_steps}
-  num_inference_steps: 10
-  obs_as_global_cond: True
-  diffusion_timestep_embed_dim: 256
-  visual_cond_len: 1
-  n_layer: 12
-  n_head: 8
-  n_emb: 512
-  qkv_bias: False
-  qk_norm: True
-  block_type: "DiTX"
-  language_conditioned: False
-  sample_t_mode: "uniform"
-
-  obs_encoder:
-    _target_: diffusion_policy_3d.model.vision.timm_obs_encoder.TimmObsEncoder
-    shape_meta: ${shape_meta}
-
-    model_name: 'r3m'
-    pretrained: True
-    frozen: False
-
-    global_pool: ''
-
-    feature_aggregation: null
-    position_encording: 'sinusoidal' # 'learnable' or 'sinusoidal'. it only works for transformer
-
-    downsample_ratio: 32
-
-    transforms:
+  model_name: 'r3m'
+  pretrained: True
+  frozen: False
+  v_min: ${v_min}
+  v_max: ${v_max}
+  num_bins: ${num_bins}
+  share_rgb_model: True
+  transforms:
       - type: RandomCrop
         ratio: 0.95
       - _target_: torchvision.transforms.RandomRotation
         degrees:
           - -5.0
-          - 5.0 
+          - 5.0
         expand: false
       - _target_: torchvision.transforms.ColorJitter
         brightness: 0.3
         contrast: 0.4
         saturation: 0.5
         hue: 0.08
-     
-
-    use_group_norm: True
-    share_rgb_model: False
-    imagenet_norm: True
-
 
 ema:
   _target_: diffusion_policy_3d.model.diffusion.ema_model.EMAModel
@@ -82,20 +50,21 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 128
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 128
   num_workers: 8
   shuffle: False
   pin_memory: True
   persistent_workers: False
 
 optimizer:
+  _target_: torch.optim.AdamW
   lr: 1.0e-4
   betas: [0.95, 0.999]
   eps: 1.0e-8
@@ -108,7 +77,7 @@ training:
   resume: False
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 501
+  num_epochs: 301
   gradient_accumulate_every: 1
   use_ema: True
   rollout_every: 200
@@ -138,7 +107,7 @@ checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 3
+    k: 2
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False

@@ -22,7 +22,7 @@ import numpy as np
 from termcolor import cprint
 import shutil
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
-from diffusion_policy_3d.policy.diffusion_image_policy import DiffusionImagePolicy
+from diffusion_policy_3d.policy.value_critic import ValueCritic
 from diffusion_policy_3d.dataset.base_dataset import BaseImageDataset
 from diffusion_policy_3d.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy_3d.common.json_logger import JsonLogger
@@ -32,7 +32,7 @@ from diffusion_policy_3d.model.common.lr_scheduler import get_scheduler
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-class DPWorkspace(BaseWorkspace):
+class CriticWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -45,31 +45,12 @@ class DPWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionImagePolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: ValueCritic = hydra.utils.instantiate(cfg.policy)
 
-        self.ema_model: DiffusionImagePolicy = None
+        self.ema_model: ValueCritic = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
-        """""
-        optimizer_kwargs = {k: v for k, v in cfg.optimizer.items() if k != '_target_'}
-        
-        # 定义参数组
-        param_groups = [
-            {
-                'params': self.model.obs_encoder.parameters(),
-                'lr': optimizer_kwargs['lr'] / 10  # obsencoder的学习率设为原来的1/10
-            },
-            {
-                'params': [p for name, p in self.model.named_parameters() 
-                          if not name.startswith('obs_encoder.')],  # diffusion部分（非obsencoder部分）
-                'lr': optimizer_kwargs['lr']  # diffusion部分保持原来的学习率
-            }
-        ]
 
-        # 手动创建优化器实例
-        optimizer_class = hydra.utils.get_class(cfg.optimizer._target_)
-        self.optimizer = optimizer_class(param_groups, **{k: v for k, v in optimizer_kwargs.items() if k != 'lr'})
-        """""
         # configure training state
         self.optimizer = hydra.utils.instantiate(
             cfg.optimizer, params=self.model.parameters())
@@ -93,15 +74,10 @@ class DPWorkspace(BaseWorkspace):
         # dataset element: {'obs', 'action'}
         # obs: {'image': (16,3,96,96) with range [0,1],  'agent_pos': (16,2)}
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
-        normalizer = dataset.get_normalizer()
-
+        
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
-
-        self.model.set_normalizer(normalizer) # 训练时使用的normalizer，其也是nn.Module因此在deploy时也会加载参数并使用
-        if cfg.training.use_ema:
-            self.ema_model.set_normalizer(normalizer) 
 
         # configure lr scheduler
         lr_scheduler = get_scheduler(
@@ -254,23 +230,25 @@ class DPWorkspace(BaseWorkspace):
                             # log epoch average validation loss
                             step_log['val_loss'] = val_loss
 
-                # run diffusion sampling on a training batch
+                # eval on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
-                        gt_action = batch['action']
-                        
-                        result = policy.predict_action(obs_dict)
-                        pred_action = result['action_pred']
-                        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
-                        step_log['train_action_mse_error'] = mse.item()
+                        gt_dist = batch['target']
+                        gt_prob = torch.clamp(gt_dist, min=1e-8, max=1.0)
+                        bin_centers = self.model.bin_centers.to(gt_prob.device).view(1, 1, -1)
+                        gt_value = torch.sum(gt_prob * bin_centers, dim=-1, keepdim=True)
+                        #print("gt_value:", gt_value.shape)
+                        pred_value = policy(obs_dict) #shape [B,T,1]
+                        #print("pred_value:", pred_value.shape)  
+                        mse = torch.nn.functional.mse_loss(pred_value, gt_value)
+                        step_log['train_value_mse_error'] = mse.item()
                         del batch
                         del obs_dict
-                        del gt_action
-                        del result
-                        del pred_action
+                        del gt_prob
+                        del pred_value
                         del mse
                 
               
@@ -422,7 +400,7 @@ class DPWorkspace(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem)
 
 def main(cfg):
-    workspace = DPWorkspace(cfg)
+    workspace = CriticWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":

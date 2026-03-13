@@ -1,9 +1,9 @@
 defaults:
   - _self_
-  - task: gr1_dex-image
+  - task: adroit_door_image
 
-name: train_DIT
-_target_: diffusion_policy_3d.workspace.flow_workspace.FlowWorkspace
+name: train_diffusion_unet_hybrid
+_target_: diffusion_policy_3d.workspace.RTC_dp_workspace.RTC_DPWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -20,23 +20,32 @@ obs_as_global_cond: True
 
 use_image: true
 policy:
-  _target_: diffusion_policy_3d.policy.flow_image_policy.Flow_DIT_ImagePolicy
-  shape_meta: ${shape_meta}
+  _target_: diffusion_policy_3d.policy.diffusion_image_RTC_policy.DiffusionImageRTCPolicy
+  
+  condition_type: film
+  diffusion_step_embed_dim: 128
+  down_dims: [256, 512, 1024]
+  max_latency_steps: 3
+  cond_dropout_prob: 0.9
   horizon: ${horizon}
+  kernel_size: 5
   n_action_steps: ${n_action_steps}
+  n_groups: 8
   n_obs_steps: ${n_obs_steps}
+ 
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    num_train_timesteps: 50
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
+    prediction_type: epsilon # or sample
   num_inference_steps: 10
-  obs_as_global_cond: True
-  diffusion_timestep_embed_dim: 256
-  visual_cond_len: 1
-  n_layer: 12
-  n_head: 8
-  n_emb: 512
-  qkv_bias: False
-  qk_norm: True
-  block_type: "DiTX"
-  language_conditioned: False
-  sample_t_mode: "uniform"
+  obs_as_global_cond: true
+  shape_meta: ${shape_meta}
 
   obs_encoder:
     _target_: diffusion_policy_3d.model.vision.timm_obs_encoder.TimmObsEncoder
@@ -59,7 +68,7 @@ policy:
       - _target_: torchvision.transforms.RandomRotation
         degrees:
           - -5.0
-          - 5.0 
+          - 5.0
         expand: false
       - _target_: torchvision.transforms.ColorJitter
         brightness: 0.3
@@ -69,7 +78,7 @@ policy:
      
 
     use_group_norm: True
-    share_rgb_model: False
+    share_rgb_model: True
     imagenet_norm: True
 
 
@@ -96,6 +105,7 @@ val_dataloader:
   persistent_workers: False
 
 optimizer:
+  _target_: torch.optim.AdamW
   lr: 1.0e-4
   betas: [0.95, 0.999]
   eps: 1.0e-8
@@ -108,7 +118,7 @@ training:
   resume: False
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 501
+  num_epochs: 301
   gradient_accumulate_every: 1
   use_ema: True
   rollout_every: 200
@@ -138,7 +148,7 @@ checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 3
+    k: 2
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False

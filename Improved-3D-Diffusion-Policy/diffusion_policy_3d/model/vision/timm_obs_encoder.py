@@ -88,7 +88,7 @@ class TimmObsEncoder(ModuleAttrMixin):
         if model_name == "r3m":
             from r3m import load_r3m
             model = load_r3m("resnet18", pretrained=pretrained) # resnet18, resnet34
-            #model.eval()
+            model.eval()#非常重要不然根本无法work,batchnorm层很关键
             cprint(f"Loaded R3M model using {model_name}. pretrained={pretrained}", 'green')
         else:
             raise NotImplementedError(f"Unsupported model_name: {model_name}")
@@ -137,7 +137,7 @@ class TimmObsEncoder(ModuleAttrMixin):
             )
         
         image_shape = None
-        obs_shape_meta = shape_meta['obs']
+        obs_shape_meta = shape_meta['obs'] 
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])
             type = attr.get('type', 'low_dim')
@@ -160,7 +160,7 @@ class TimmObsEncoder(ModuleAttrMixin):
             if type == 'rgb':
                 rgb_keys.append(key)
 
-                this_model = model if share_rgb_model else copy.deepcopy(model)
+                this_model = model if share_rgb_model else copy.deepcopy(model) #共享obsencoder，相当于多视角维放在batch维
                 key_model_map[key] = this_model
 
                 this_transform = transform
@@ -268,7 +268,7 @@ class TimmObsEncoder(ModuleAttrMixin):
     def forward(self, obs_dict):
         features = list()
         batch_size = next(iter(obs_dict.values())).shape[0]
-        
+        img_list=[]
         # process rgb input
         for key in self.rgb_keys:
             img = obs_dict[key]
@@ -283,10 +283,17 @@ class TimmObsEncoder(ModuleAttrMixin):
                 # new size: Bx3xnHxnW
                 img = F.interpolate(img, size=(target_H, target_W), mode='bilinear', align_corners=False)
             img = self.key_transform_map[key](img)
-            raw_feature = self.key_model_map[key](img).to(self.device)
-            feature = self.aggregate_feature(raw_feature)
-            assert len(feature.shape) == 2 and feature.shape[0] == B * T
-            features.append(feature.reshape(B, -1))
+            img_list.append(img)
+        key = self.rgb_keys[0]#统一共享第一个key的模型
+        img = torch.cat(img_list, dim=0) #所有图像并行送入模型
+        feature = self.key_model_map[key](img).to(self.device)
+        assert len(feature.shape) == 2 and feature.shape[0] == B * T * len(self.rgb_keys)
+        tuple_feature = torch.split(feature, B, dim=0) #将并行输出的特征重新分回B,T
+        features.extend(tuple_feature)
+            #raw_feature = self.key_model_map[key](img).to(self.device)
+            #feature = self.aggregate_feature(raw_feature)
+            #assert len(feature.shape) == 2 and feature.shape[0] == B * T
+            #features.append(feature.reshape(B, -1))
             # print("feat:", feature.device)
 
         # process lowdim input 如agent_pos

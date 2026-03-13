@@ -26,6 +26,7 @@ class GR1DexDatasetImage(BaseDataset):
             task_name=None,
             use_act_normal=False,
             use_img=True,
+            use_wrist_img=False,
             use_depth=False,
             use_relative_action=True,
             ):
@@ -34,17 +35,20 @@ class GR1DexDatasetImage(BaseDataset):
         self.task_name = task_name
         self.use_act_normal = use_act_normal
         self.use_img = use_img
+        self.use_wrist_img = use_wrist_img
         self.use_depth = use_depth
         self.use_relative_action = use_relative_action
         self.n_obs_steps = n_obs_steps
         self.n_action_steps = n_action_steps
         self.tools=MATHTOOLS()
+
         buffer_keys = [
             'state', 
-            'action',]
-        
+            'action',] 
         if self.use_img:
-            buffer_keys.append('img')
+            buffer_keys.append('img') #对齐数据采集的img
+        if self.use_wrist_img:
+            buffer_keys.append('wrist_img')
         if self.use_depth:
             buffer_keys.append('depth')
 
@@ -94,6 +98,8 @@ class GR1DexDatasetImage(BaseDataset):
 
         if self.use_img:
             normalizer['image'] = SingleFieldLinearNormalizer.create_identity()
+        if self.use_wrist_img:
+            normalizer['wrist_img'] = SingleFieldLinearNormalizer.create_identity()
         if self.use_depth:
             normalizer['depth'] = SingleFieldLinearNormalizer.create_identity()
         
@@ -105,20 +111,28 @@ class GR1DexDatasetImage(BaseDataset):
         return len(self.sampler)
 
     def _sample_to_data(self, sample):
-        agent_pos = sample['state'][:,].astype(np.float32)#只取所需观察即前n_obs_steps个
-
+        #agent_pos = sample['state'][:,].astype(np.float32)#只取所需观察即前n_obs_steps个
+        agent_pos = sample['state'][:self.n_obs_steps,:6].astype(np.float32)
+        current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
+        #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了
         if self.use_img:
             image = sample['img'][:self.n_obs_steps,].astype(np.float32)
+        if self.use_wrist_img:
+            wrist_img = sample['wrist_img'][:self.n_obs_steps,].astype(np.float32)
         if self.use_depth:
             depth = sample['depth'][:self.n_obs_steps,].astype(np.float32)
         if self.use_relative_action:
             arm_action=sample['action'][:,:9]
             pose=self.tools.xyz_6drot_to_mat(arm_action)
-            pose_0=pose[0]#每个序列开始时的当前位姿为参考位姿(使用该观察的前一个动作位姿来作为参考位姿才是正确相对当前这个观察位姿)
-            inv_pose_0=self.tools.se3_inverse(pose_0)
-            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose[1:])#相对于参考位姿的相对位姿
+            if current_agent_pose.shape[-1]<6: #如果没有提供当前位姿，就用第一个动作位姿作为参考位姿
+                pose_0=pose[0]#每个序列开始时的当前动作位姿为参考位姿
+                inv_pose_0=self.tools.se3_inverse(pose_0)
+            else:
+                pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])#其是xyz+rotvec格式
+                inv_pose_0=self.tools.se3_inverse(pose_0)
+            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)#相对于参考位姿的相对位姿
             Relative_act=self.tools.mat2xyz_6drot(Relative_pose)
-            action=np.concatenate([Relative_act,sample['action'][1:,9:]],axis=-1)
+            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)#相对位姿和绝对关节角
             
 
         data = {
@@ -128,6 +142,8 @@ class GR1DexDatasetImage(BaseDataset):
         
         if self.use_img:
             data['obs']['image'] = image
+        if self.use_wrist_img:
+            data['obs']['wrist_img'] = wrist_img
         if self.use_depth:
             data['obs']['depth'] = depth
         if self.use_relative_action:

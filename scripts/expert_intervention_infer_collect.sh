@@ -2,7 +2,6 @@
 
 #   bash scripts/deploy_policy.sh idp3 gr1_dex-3d 0913_example
 #   bash scripts/deploy_policy.sh dp_224x224_r3m gr1_dex-image 0913_example
-#   bash scripts/deploy_policy.sh Recap Recap-image 0312
 #   bash scripts/deploy_policy.sh flow_224x224_Dino gr1_dex-image 0114_example
 #   bash scripts/deploy_policy.sh flow_224x224_transformer gr1_dex-image 0115
 
@@ -34,7 +33,7 @@ sudo chmod 666 /dev/ttyUSB0
 export HYDRA_FULL_ERROR=1 
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 
-python deploy.py --config-name=${config_name}.yaml \
+python expert_intervention_infer_collect.py --config-name=${config_name}.yaml \
                             task=${task_name} \
                             hydra.run.dir=${run_dir} \
                             training.debug=$DEBUG \
@@ -44,7 +43,3 @@ python deploy.py --config-name=${config_name}.yaml \
                             logging.mode=${wandb_mode} \
                             checkpoint.save_ckpt=${save_ckpt} \
                             task.dataset.zarr_path=$dataset_path 
-
-
-
-                                

@@ -256,7 +256,7 @@ class  MATHTOOLS:
         T_inv[:3, 3] = t_inv
         
         return T_inv
-    
+  
     def normalize(self,x, axis=-1, eps=1e-8):
         """沿指定轴做 L2 归一化"""
         norm = np.linalg.norm(x, axis=axis, keepdims=True)

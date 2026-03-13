@@ -161,7 +161,7 @@ class SingleFieldLinearNormalizer(DictOfTensorMixin):
             'std': torch.tensor([1], dtype=dtype)
         }
         return cls.create_manual(scale, offset, input_stats_dict)
-
+    #统一调用抽象接口_normalize
     def normalize(self, x: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
         return _normalize(x, self.params_dict, forward=True)
 
@@ -258,7 +258,7 @@ class StringNormalizer(DictOfTensorMixin):
         return self.normalize(x)
 
 
-
+# 计算数据的归一化参数保存为nn.ParameterDict
 def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
         last_n_dims=1,
         dtype=torch.float32,
@@ -340,7 +340,7 @@ def _fit(data: Union[torch.Tensor, np.ndarray, zarr.Array],
         p.requires_grad_(False)
     return this_params
 
-
+# 归一化函数 forward=True 时为归一化，forward=False 时为反归一化
 def _normalize(x, params, forward=True):
     assert 'scale' in params
     if isinstance(x, dict) or isinstance(x, list):

@@ -22,7 +22,7 @@ import numpy as np
 from termcolor import cprint
 import shutil
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
-from diffusion_policy_3d.policy.diffusion_image_policy import DiffusionImagePolicy
+from diffusion_policy_3d.policy.diffusion_image_RTC_policy import DiffusionImageRTCPolicy
 from diffusion_policy_3d.dataset.base_dataset import BaseImageDataset
 from diffusion_policy_3d.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy_3d.common.json_logger import JsonLogger
@@ -32,7 +32,7 @@ from diffusion_policy_3d.model.common.lr_scheduler import get_scheduler
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-class DPWorkspace(BaseWorkspace):
+class RTC_DPWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
@@ -45,31 +45,11 @@ class DPWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionImagePolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: DiffusionImageRTCPolicy = hydra.utils.instantiate(cfg.policy)
 
-        self.ema_model: DiffusionImagePolicy = None
+        self.ema_model: DiffusionImageRTCPolicy = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
-        """""
-        optimizer_kwargs = {k: v for k, v in cfg.optimizer.items() if k != '_target_'}
-        
-        # 定义参数组
-        param_groups = [
-            {
-                'params': self.model.obs_encoder.parameters(),
-                'lr': optimizer_kwargs['lr'] / 10  # obsencoder的学习率设为原来的1/10
-            },
-            {
-                'params': [p for name, p in self.model.named_parameters() 
-                          if not name.startswith('obs_encoder.')],  # diffusion部分（非obsencoder部分）
-                'lr': optimizer_kwargs['lr']  # diffusion部分保持原来的学习率
-            }
-        ]
-
-        # 手动创建优化器实例
-        optimizer_class = hydra.utils.get_class(cfg.optimizer._target_)
-        self.optimizer = optimizer_class(param_groups, **{k: v for k, v in optimizer_kwargs.items() if k != 'lr'})
-        """""
         # configure training state
         self.optimizer = hydra.utils.instantiate(
             cfg.optimizer, params=self.model.parameters())
@@ -422,7 +402,7 @@ class DPWorkspace(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem)
 
 def main(cfg):
-    workspace = DPWorkspace(cfg)
+    workspace = RTC_DPWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":
