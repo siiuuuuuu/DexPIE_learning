@@ -3,6 +3,9 @@
 #   bash scripts/train_policy.sh dp_224x224_r3m gr1_dex-image 0114_example
 #   bash scripts/train_policy.sh RTC_dp_224x224_r3m gr1_dex-image 0310
 #   bash scripts/train_policy.sh Recap Recap-image 0312
+#   bash scripts/train_policy.sh RTC_Recap Recap-image 0313
+#   bash scripts/train_policy.sh RecapNFT Recap-image 0315
+#   bash scripts/train_policy.sh RTC_RecapNFT Recap-image 0316
 #   bash scripts/train_policy.sh flow_224x224_Dino gr1_dex-image 0114_example
 #   bash scripts/train_policy.sh flow_224x224_clip gr1_dex-image 0114_example
 #   bash scripts/train_policy.sh flow_224x224_transformer gr1_dex-image 0114_example
@@ -11,7 +14,7 @@
 #dataset_path=/home/lrz/dp_data/train_data
 dataset_path=/home/lrz/dp_data/train_yangfang_1_data
 DEBUG=False
-wandb_mode=offline
+wandb_mode=online
 
 
 alg_name=${1}

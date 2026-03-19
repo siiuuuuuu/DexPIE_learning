@@ -28,8 +28,8 @@ from diffusion_policy_3d.common.hand_action_util import hand_action_util
 
 from communication.UR_communication import UR_Comm
 from communication.InspireHandControl_V1 import InspireHand
-
-
+import h5py
+from datetime import datetime
 import numpy as np
 import torch
 from termcolor import cprint
@@ -65,16 +65,9 @@ def main(cfg: OmegaConf):
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
 
-    if workspace.__class__.__name__ == 'RTC_DPWorkspace':
-        use_image = True
-        use_point_cloud = False
-        if cfg.task.dataset.use_wrist_img:
-            use_wrist_img = True
-        else:
-            use_wrist_img = False
-    else:
-        use_image = False
-        use_point_cloud = True
+    use_image = bool(cfg.task.dataset.get('use_img', True))
+    use_point_cloud = not use_image
+    use_wrist_img = bool(cfg.task.dataset.get('use_wrist_img', False))
     
     use_jit_model = False
 
@@ -87,7 +80,7 @@ def main(cfg: OmegaConf):
     # pour
     roll_out_length_dict = {
         "pour": 300,
-        "grasp": 3000,
+        "grasp": 300,
         "wipe": 300,
     }
     # task = "wipe"
@@ -95,6 +88,8 @@ def main(cfg: OmegaConf):
     # task = "pour"
     roll_out_length = roll_out_length_dict[task]
     tools=MATHTOOLS()
+    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/task1")
+    os.makedirs(data_dir, exist_ok=True)
     dt=1/25
     img_size = 256
     num_points = 4096
@@ -131,11 +126,17 @@ def main(cfg: OmegaConf):
     time.sleep(1)
     cam_dict = camera()
     obs_img = cam_dict['front_color']
+    if use_wrist_img:
+        obs_wrist_img = cam_dict['right_color']
+    color_array.append(obs_img)
+    if use_wrist_img:
+        wrist_color_array.append(obs_wrist_img)
     agent_state_dict = arm_comm.get_robot_state()
     qpos =agent_state_dict['joint_positions']
     np_qpos = np.stack([qpos], axis=0)[None, ...]
     np_obs_img = np.stack([obs_img], axis=0)[None, ...]
     agent_mat = agent_state_dict["mat"]
+    robot_state_array.append(np.concatenate((qpos, agent_mat)))
     policy_ref_mat = tools.xyz_rotvec_to_mat(agent_mat)
     obs_dict = {
         'agent_pos': np_qpos,
@@ -150,22 +151,29 @@ def main(cfg: OmegaConf):
     relative_arm_mat=tools.xyz_6drot_to_mat(np_action[:, :9])#shape T,4,4
     arm_mats=np.einsum("ij,tjk->tik", policy_ref_mat, relative_arm_mat)#shape T,4,4
     current_arm_mat = policy_ref_mat
-    while step_count < roll_out_length:
-        try:
+    skip_obs_once = True
+    try:
+        while step_count < roll_out_length:
             ref = None
             for i in range(action_horizon):
                 if step_count >= roll_out_length:
                     break
                 start_time = time.time()
 
-                if i != 0: #初始的就不用获取观测，直接用提供给policy的观测
+                if skip_obs_once: # 仅在整个 rollout 的第一个动作复用初始化观测
+                    skip_obs_once = False
+                else:
                     cam_dict = camera()
                     obs_img = cam_dict['front_color']
+                    color_array.append(obs_img)
+                    if use_wrist_img:
+                        wrist_color_array.append(cam_dict['right_color'])
                     agent_state_dict = arm_comm.get_robot_state()
                     qpos =agent_state_dict['joint_positions']
                     np_qpos = np.stack([qpos], axis=0)[None, ...]
                     np_obs_img = np.stack([obs_img], axis=0)[None, ...]
                     agent_mat = agent_state_dict["mat"]
+                    robot_state_array.append(np.concatenate((qpos, agent_mat)))
                     current_arm_mat = tools.xyz_rotvec_to_mat(agent_mat) #当前观测的位姿
                     
                 if i == action_horizon-max_latency_step: #执行到只剩最大延迟步数时，用当前观测更新policy
@@ -184,13 +192,14 @@ def main(cfg: OmegaConf):
                     ref = RTC_policy.inference.remote(obs_dict)#异步推理
 
                 arm_mat=arm_mats[i]
+                action_array.append(np.concatenate((tools.mat2xyz_6drot(arm_mat), np_action[i,9:])))
                 arm_action=tools.mat2xyz_rotvec(arm_mat) #UR格式
                 arm_comm.set_arm_action(arm_action)
                 hand_action = hand_action_util(np_action[i,9:])
                 hand_comm.setangle(*hand_action)
 
                 if i == action_horizon-1 and ref is not None:
-                    action=ray.get(ref)#在最后一步的执行中获取异步推理结果，不阻塞动作执行（发送了动作后再获取）
+                    action=ray.get(ref) #在最后一步的执行中获取异步推理结果，不阻塞动作执行（发送了动作后再获取）
                     action_horizon = action.shape[0] #换成horizon-max_latency_step
                     np_action=action.numpy()#替换后继续推理
                     relative_arm_mat=tools.xyz_6drot_to_mat(np_action[:, :9])#shape T,4,4
@@ -199,15 +208,51 @@ def main(cfg: OmegaConf):
                 step_count += 1
                 time.sleep(max(0, dt - (time.time() - start_time)))
 
-        except Exception as e:
-            arm_comm.cleanup()
-            hand_comm.close()
-            camera.finalize()
+    except Exception as e:
+        arm_comm.cleanup()
+        hand_comm.close()
+        camera.finalize()
             
     print("deploy done")
     arm_comm.cleanup()
     hand_comm.close()
     camera.finalize()
+    print("action_array shape:", np.array(action_array).shape)
+    print("color_array shape:", np.array(color_array).shape)
+    if len(action_array)>0:
+        usr_success=input("是否成功完成任务？(y/n): ").lower().strip()
+        if usr_success=='y':
+            success=True
+        else:
+            success=False
+        user_choice = input("是否保存录制数据？(y/n): ").lower().strip() #先把之前的按键清空
+        if user_choice=='y':
+            record_file_name = os.path.join(data_dir, datetime.now().strftime("demo_%Y%m%d_%H%M%S")+".h5")
+            with h5py.File(record_file_name, "w") as f:
+                print("Data recording")
+                seq_length = len(action_array)
+                color_array = np.array(color_array)
+                if use_wrist_img:
+                    wrist_color_array = np.array(wrist_color_array)
+                    f.create_dataset("wrist_color", data=wrist_color_array)
+                env_qpos_array = np.array(robot_state_array)
+                action_array = np.array(action_array)
+                f.create_dataset("color", data=color_array)
+                f.create_dataset("env_qpos_proprioception", data=env_qpos_array)
+                f.create_dataset("action", data=action_array)
+                f.attrs["success"] = success #标记是否成功完成任务
+    
+            print("Data recording done.")
+            if use_wrist_img:
+                cprint(f"wrist_color shape: {wrist_color_array.shape}", "yellow")
+            cprint(f"color shape: {color_array.shape}", "yellow")
+            cprint(f"action shape: {action_array.shape}", "yellow")
+            cprint(f"env_qpos shape: {env_qpos_array.shape}", "yellow")
+            cprint(f"save data at step: {seq_length} in {record_file_name}", "yellow")
+        else:
+            print("不保存数据")
+    else:
+        print("无数据，不保存")
 
 
 if __name__ == "__main__":

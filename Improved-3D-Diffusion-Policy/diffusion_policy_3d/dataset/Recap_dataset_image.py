@@ -45,7 +45,13 @@ class RecapDatasetImage(BaseDataset):
         buffer_keys = [
             'state', 
             'action',
-            'intervention',] 
+        ] 
+        disk_replay_buffer = ReplayBuffer.create_from_path(zarr_path)
+        self.has_intervention = 'intervention' in disk_replay_buffer.keys()
+        if self.has_intervention:
+            buffer_keys.append('intervention')
+        else:
+            cprint("No 'intervention' in dataset, mark expert samples as intervention-positive.", 'yellow')
         if self.use_img:
             buffer_keys.append('img') #对齐数据采集的img
         if self.use_wrist_img:
@@ -114,18 +120,21 @@ class RecapDatasetImage(BaseDataset):
     def _sample_to_data(self, sample):
         valid_mask = sample['mask']
         valid_steps = int(valid_mask.sum())
-        if valid_steps > 0:
-            intervention_num = int(sample['intervention'][valid_mask].sum())
+        if 'intervention' in sample:
+            if valid_steps > 0:
+                intervention_num = int(sample['intervention'][valid_mask].sum())
+            else:
+                intervention_num = 0
+            intervent_positive = np.array(
+                intervention_num > (valid_steps / 3.0), dtype=np.bool_
+            )  # 只有干预步数大于有效步长度1/3时才为True（一般邻近自主步就是负样本），后续输出shape [B]
         else:
-            intervention_num = 0
-        intervent_positive = np.array(
-            intervention_num > (valid_steps / 3.0), dtype=np.bool_
-        )  # 只有干预步数大于有效步长度1/3时才为True（一般邻近自主步就是负样本），后续输出shape [B]
+            intervent_positive = np.array(True, dtype=np.bool_)  # 专家数据没有该字段时，默认标记为干预样本
         agent_pos = sample['state'][[0,-1],:6].astype(np.float32)
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
         #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了
         if self.use_img:
-            image = sample['img'][[0,-1],].astype(np.float32) #取第一个和最后一个图像，两个价值来计算优势值
+            image = sample['img'][[0,-1],].astype(np.float32) #取第一个和最后一个图像，用两个观测的价值来计算优势值
         if self.use_wrist_img:
             wrist_img = sample['wrist_img'][[0,-1],].astype(np.float32)
         if self.use_depth:

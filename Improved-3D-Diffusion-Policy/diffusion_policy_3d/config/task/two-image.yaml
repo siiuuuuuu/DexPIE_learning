@@ -33,6 +33,6 @@ dataset:
   max_train_episodes: 1000
   use_act_normal: False
   use_img: true
-  use_wrist_img: true
+  use_wrist_img: true #设置为true
   use_depth: false
   use_relative_action: true

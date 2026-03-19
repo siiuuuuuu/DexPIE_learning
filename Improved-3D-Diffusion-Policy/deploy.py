@@ -209,7 +209,7 @@ def main(cfg: OmegaConf):
     use_jit_model = False
 
 
-    policy = workspace.get_model()
+    policy = workspace.get_model() #从该配置文件的保存ckpt路径（与训练的一致）加载模型，所以即使改了参数（不同于训练的参数），也能加载正确的模型
 
     # fetch policy model
     #policy = workspace.get_model()

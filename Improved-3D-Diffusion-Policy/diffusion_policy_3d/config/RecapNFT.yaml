@@ -21,13 +21,13 @@ obs_as_global_cond: True
 use_image: true
 value_critic_ckpt_path: /home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0311_seed0/checkpoints/latest.ckpt
 policy:
-  _target_: diffusion_policy_3d.policy.Recap.RecapPolicy
+  _target_: diffusion_policy_3d.policy.RecapNFT.RecapNFTPolicy
   
   condition_type: film
   diffusion_step_embed_dim: 128
   down_dims: [256, 512, 1024]
-  positive_cond_drop_prob: 0.3
-  positive_cfg_scale: 2
+  beta: 5
+  cfg_scale: 2.0
   horizon: ${horizon}
   kernel_size: 5
   n_action_steps: ${n_action_steps}
@@ -92,7 +92,7 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True
