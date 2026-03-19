@@ -4,6 +4,7 @@
 #   bash scripts/train_policy.sh RTC_dp_224x224_r3m gr1_dex-image 0310
 #   bash scripts/train_policy.sh Recap Recap-image 0312
 #   bash scripts/train_policy.sh RTC_Recap Recap-image 0313
+#   bash scripts/train_policy.sh RTC_sigRecap Recap-image 0319
 #   bash scripts/train_policy.sh RecapNFT Recap-image 0315
 #   bash scripts/train_policy.sh RTC_RecapNFT Recap-image 0316
 #   bash scripts/train_policy.sh flow_224x224_Dino gr1_dex-image 0114_example
@@ -56,7 +57,3 @@ python train.py --config-name=${config_name}.yaml \
                             logging.mode=${wandb_mode} \
                             checkpoint.save_ckpt=${save_ckpt} \
                             task.dataset.zarr_path=$dataset_path 
-
-
-
-                                

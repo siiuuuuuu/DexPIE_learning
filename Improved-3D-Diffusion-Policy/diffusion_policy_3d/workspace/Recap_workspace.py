@@ -61,7 +61,6 @@ class RecapWorkspace(BaseWorkspace):
         self.global_step = 0
         self.epoch = 0
         self.ratio = cfg.training.ratio
-        self.momentum = cfg.training.momentum
         self.value_critic: ValueCritic = None
 
     def _load_frozen_value_critic(self, cfg: OmegaConf, device: torch.device):
@@ -85,14 +84,11 @@ class RecapWorkspace(BaseWorkspace):
         critic_cfg = critic_workspace.cfg
         self.max_length = critic_cfg.get('max_length', critic_cfg.task.dataset.max_length)
         cprint(f"[ValueCritic] loaded and frozen from: {ckpt_path}", "cyan")
-    #优势分位数EMA更新
-    def update_eps(self, adv, prev_eps):
-        new_eps = torch.quantile(adv.detach(), 1 - self.ratio)
 
-        if prev_eps is None:
-            return new_eps
-
-        return self.momentum * prev_eps + (1 - self.momentum) * new_eps
+    def get_positive_mask(self, advantage: torch.Tensor):
+        quantile_thr = torch.quantile(advantage.detach(), 1 - self.ratio)
+        is_positive = (advantage > 0) & (advantage > quantile_thr)
+        return is_positive, quantile_thr
 
     def _prepare_obs_once(self, obs_dict):
         # Prepare image/wrist image once per batch for both value critic and recap loss.
@@ -209,7 +205,6 @@ class RecapWorkspace(BaseWorkspace):
         
         
         RUN_VALIDATION = False # reduce time cost
-        eps = None
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
@@ -233,14 +228,13 @@ class RecapWorkspace(BaseWorkspace):
                     v_last = batch_value[:, -1, 0]   # [B]
                     v_first = batch_value[:, 0, 0]   # [B]
                     advantage = mid_return + v_last - v_first  # [B], V_{t+H}-V_t
-                    eps = self.update_eps(advantage, eps)
-                    is_positive = (advantage > eps)  # [B]
+                    is_positive, quantile_thr = self.get_positive_mask(advantage)
                     adv_det = advantage.detach()
                     adv_mean = adv_det.mean().item()
                     adv_std = adv_det.std(unbiased=False).item()
                     adv_p90 = torch.quantile(adv_det, 0.9).item()
                     positive_ratio = is_positive.float().mean().item()
-                    eps_value = eps.item() if torch.is_tensor(eps) else float(eps)
+                    quantile_thr_value = quantile_thr.item()
 
                     raw_loss = self.model.compute_loss(batch_for_loss, is_positive=is_positive, obs_preprocessed=True)
                     loss = raw_loss / cfg.training.gradient_accumulate_every
@@ -262,7 +256,7 @@ class RecapWorkspace(BaseWorkspace):
                     step_log = {
                         'train_loss': raw_loss_cpu,
                         'positive_ratio': positive_ratio,
-                        'eps': eps_value,
+                        'eps': quantile_thr_value,
                         'adv_mean': adv_mean,
                         'adv_std': adv_std,
                         'adv_p90': adv_p90,
@@ -313,8 +307,7 @@ class RecapWorkspace(BaseWorkspace):
                             v_last = batch_value[:, -1, 0]   # [B]
                             v_first = batch_value[:, 0, 0]   # [B]
                             advantage = mid_return + v_last - v_first  # [B], V_{t+H}-V_t
-                            eps = self.update_eps(advantage, eps)
-                            is_positive = (advantage > eps)  # [B]
+                            is_positive, _ = self.get_positive_mask(advantage)
                             loss = self.model.compute_loss(batch_for_loss, is_positive=is_positive, obs_preprocessed=True)
                             val_losses.append(loss)
                             if (cfg.training.max_val_steps is not None) \

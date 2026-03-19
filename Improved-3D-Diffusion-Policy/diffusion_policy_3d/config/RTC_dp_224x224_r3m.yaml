@@ -3,7 +3,7 @@ defaults:
   - task: adroit_door_image
 
 name: train_diffusion_unet_hybrid
-_target_: diffusion_policy_3d.workspace.RTC_dp_workspace.RTC_DPWorkspace
+_target_: diffusion_policy_3d.workspace.dp_workspace.DPWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}

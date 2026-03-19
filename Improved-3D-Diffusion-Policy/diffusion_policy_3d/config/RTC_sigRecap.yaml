@@ -3,7 +3,7 @@ defaults:
   - task: Recap_image
 
 name: train_diffusion_unet_hybrid
-_target_: diffusion_policy_3d.workspace.Recap_workspace.RecapWorkspace
+_target_: diffusion_policy_3d.workspace.sigRecap_workspace.sigRecapWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -21,19 +21,21 @@ obs_as_global_cond: True
 use_image: true
 value_critic_ckpt_path: /home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0311_seed0/checkpoints/latest.ckpt
 policy:
-  _target_: diffusion_policy_3d.policy.RecapNFT.RecapNFTPolicy
-  
+  _target_: diffusion_policy_3d.policy.RTC_sigRecap.RTCsigRecapPolicy
+
   condition_type: film
   diffusion_step_embed_dim: 128
   down_dims: [256, 512, 1024]
-  beta: 1
-  cfg_scale: 2.0
+  max_latency_steps: 3
+  cond_dropout_prob: 0.9 # 前缀填充dropout概率
+  positive_cond_drop_prob: 0.2 #优势条件dropout概率
+  positive_cfg_scale: 2.0
   horizon: ${horizon}
   kernel_size: 5
   n_action_steps: ${n_action_steps}
   n_groups: 8
   n_obs_steps: ${n_obs_steps}
- 
+
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
     num_train_timesteps: 50
@@ -76,7 +78,6 @@ policy:
         contrast: 0.4
         saturation: 0.5
         hue: 0.08
-     
 
     use_group_norm: True
     share_rgb_model: True

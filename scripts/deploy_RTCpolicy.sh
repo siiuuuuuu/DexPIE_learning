@@ -2,7 +2,7 @@
 
 # bash scripts/deploy_RTCpolicy.sh RTC_dp_224x224_r3m gr1_dex-image 0310
 # bash scripts/deploy_RTCpolicy.sh RTC_RecapNFT Recap-image 0316
-
+# bash scripts/deploy_RTCpolicy.sh RTC_sigRecap Recap-image 0319
 wandb_mode=online
 #dataset_path=/home/ze/projects/Improved-3D-Diffusion-Policy/training_data_example
 dataset_path=/home/lrz/dp_data/train_data

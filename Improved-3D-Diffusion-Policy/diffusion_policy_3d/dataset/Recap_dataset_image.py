@@ -129,7 +129,7 @@ class RecapDatasetImage(BaseDataset):
                 intervention_num > (valid_steps / 3.0), dtype=np.bool_
             )  # 只有干预步数大于有效步长度1/3时才为True（一般邻近自主步就是负样本），后续输出shape [B]
         else:
-            intervent_positive = np.array(True, dtype=np.bool_)  # 专家数据没有该字段时，默认标记为干预样本
+            intervent_positive = np.array(True, dtype=np.bool_)  # 当纯专家数据没有该字段时，默认标记为干预样本
         agent_pos = sample['state'][[0,-1],:6].astype(np.float32)
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
         #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了

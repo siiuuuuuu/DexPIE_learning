@@ -22,7 +22,9 @@ import numpy as np
 from termcolor import cprint
 import shutil
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
-from diffusion_policy_3d.policy.diffusion_image_RTC_policy import DiffusionImageRTCPolicy
+from diffusion_policy_3d.workspace.critic_workspace import CriticWorkspace
+from diffusion_policy_3d.policy.RTC_sigRecap import RTCsigRecapPolicy
+from diffusion_policy_3d.policy.value_critic import ValueCritic
 from diffusion_policy_3d.dataset.base_dataset import BaseImageDataset
 from diffusion_policy_3d.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy_3d.common.json_logger import JsonLogger
@@ -32,8 +34,9 @@ from diffusion_policy_3d.model.common.lr_scheduler import get_scheduler
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-class RTC_DPWorkspace(BaseWorkspace):
+class sigRecapWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
+    exclude_keys = ('value_critic',) # 排除value_critic权重，因为它是在CriticWorkspace中训练的
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
@@ -45,9 +48,9 @@ class RTC_DPWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: DiffusionImageRTCPolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: RTCsigRecapPolicy  = hydra.utils.instantiate(cfg.policy)
 
-        self.ema_model: DiffusionImageRTCPolicy = None
+        self.ema_model: RTCsigRecapPolicy = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
         # configure training state
@@ -57,6 +60,61 @@ class RTC_DPWorkspace(BaseWorkspace):
         # configure training state
         self.global_step = 0
         self.epoch = 0
+        self.ratio = cfg.training.ratio
+        self.value_critic: ValueCritic = None
+
+    def _load_frozen_value_critic(self, cfg: OmegaConf, device: torch.device):
+        ckpt_path = cfg.get('value_critic_ckpt_path', None)
+        if ckpt_path is None:
+            raise ValueError("Missing `value_critic_ckpt_path` in config. "
+                             "Please provide critic checkpoint path for Recap training.")
+        ckpt_path = pathlib.Path(ckpt_path).expanduser()
+        if not ckpt_path.is_file():
+            raise ValueError(f"Value critic checkpoint file not found: {ckpt_path}")
+
+        critic_workspace: CriticWorkspace = CriticWorkspace.create_from_checkpoint(str(ckpt_path))
+        use_ema = bool(critic_workspace.cfg.training.use_ema)
+        value_critic = critic_workspace.ema_model if (use_ema and critic_workspace.ema_model is not None) else critic_workspace.model
+        value_critic.to(device)
+        value_critic.eval()
+        for p in value_critic.parameters():
+            p.requires_grad = False
+
+        self.value_critic = value_critic
+        critic_cfg = critic_workspace.cfg
+        self.max_length = critic_cfg.get('max_length', critic_cfg.task.dataset.max_length)
+        cprint(f"[ValueCritic] loaded and frozen from: {ckpt_path}", "cyan")
+
+    def get_positive_score(self, advantage: torch.Tensor, intervention: torch.Tensor):
+        adv_det = advantage.detach()
+        adv_mean = adv_det.mean()
+        adv_std = adv_det.std(unbiased=False)
+        advantage_norm = (adv_det - adv_mean) / (adv_std + 1e-6)
+        positive_score = torch.sigmoid(advantage_norm)
+        intervention_mask = intervention.to(positive_score.device).bool().reshape_as(positive_score)
+        positive_score = torch.where(intervention_mask, torch.ones_like(positive_score), positive_score)
+        return positive_score
+
+    def _prepare_obs_once(self, obs_dict):
+        # Prepare image/wrist image once per batch for both value critic and recap loss.
+        nobs = obs_dict.copy()
+        image = nobs['image'] / 255.0
+        if image.shape[-1] == 3:
+            if len(image.shape) == 5:
+                image = image.permute(0, 1, 4, 2, 3)
+            if len(image.shape) == 4:
+                image = image.permute(0, 3, 1, 2)
+        nobs['image'] = image
+
+        if "wrist_img" in nobs:
+            wrist_img = nobs["wrist_img"] / 255.0
+            if wrist_img.shape[-1] == 3:
+                if len(wrist_img.shape) == 5:
+                    wrist_img = wrist_img.permute(0, 1, 4, 2, 3)
+                if len(wrist_img.shape) == 4:
+                    wrist_img = wrist_img.permute(0, 3, 1, 2)
+            nobs["wrist_img"] = wrist_img
+        return nobs
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -133,6 +191,7 @@ class RTC_DPWorkspace(BaseWorkspace):
         if self.ema_model is not None:
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
+        self._load_frozen_value_critic(cfg, device)
 
         # save batch for sampling
         train_sampling_batch = None
@@ -151,7 +210,6 @@ class RTC_DPWorkspace(BaseWorkspace):
         
         
         RUN_VALIDATION = False # reduce time cost
-        
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
@@ -165,8 +223,27 @@ class RTC_DPWorkspace(BaseWorkspace):
                     batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                     if train_sampling_batch is None:
                         train_sampling_batch = batch
-                    # compute loss
-                    raw_loss = self.model.compute_loss(batch)
+
+                    obs_for_loss = self._prepare_obs_once(batch['obs'])
+                    batch_for_loss = batch.copy()
+                    batch_for_loss['obs'] = obs_for_loss
+                    
+                    batch_value = self.value_critic(obs_for_loss, obs_preprocessed=True)  # [B,T,1]
+                    mid_return = -((cfg.horizon - 1) / self.max_length)  # 中间步的 return
+                    v_last = batch_value[:, -1, 0]   # [B]
+                    v_first = batch_value[:, 0, 0]   # [B]
+                    advantage = mid_return + v_last - v_first  # [B], V_{t+H}-V_t
+                    positive_score = self.get_positive_score(advantage, batch["intervention"])
+                    adv_det = advantage.detach()
+                    adv_mean = adv_det.mean().item()
+                    adv_std = adv_det.std(unbiased=False).item()
+                    adv_p90 = torch.quantile(adv_det, 0.9).item()
+                    score_det = positive_score.detach()
+                    positive_ratio = (score_det > 0.5).float().mean().item()
+                    score_mean = score_det.mean().item()
+                    score_p90 = torch.quantile(score_det, 0.9).item()
+
+                    raw_loss = self.model.compute_loss(batch_for_loss, is_positive=positive_score, obs_preprocessed=True)
                     loss = raw_loss / cfg.training.gradient_accumulate_every
                     loss.backward()
 
@@ -185,6 +262,12 @@ class RTC_DPWorkspace(BaseWorkspace):
                     train_losses.append(raw_loss_cpu)
                     step_log = {
                         'train_loss': raw_loss_cpu,
+                        'positive_ratio': positive_ratio,
+                        'adv_score_mean': score_mean,
+                        'adv_score_p90': score_p90,
+                        'adv_mean': adv_mean,
+                        'adv_std': adv_std,
+                        'adv_p90': adv_p90,
                         'global_step': self.global_step,
                         'epoch': self.epoch,
                         'lr': lr_scheduler.get_last_lr()[0]
@@ -224,7 +307,16 @@ class RTC_DPWorkspace(BaseWorkspace):
                     
                         for batch_idx, batch in enumerate(val_dataloader):
                             batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                            loss = self.model.compute_loss(batch)
+                            obs_for_loss = self._prepare_obs_once(batch['obs'])
+                            batch_for_loss = batch.copy()
+                            batch_for_loss['obs'] = obs_for_loss
+                            batch_value = self.value_critic(obs_for_loss, obs_preprocessed=True)  # [B,T,1]
+                            mid_return = -((cfg.horizon - 1) / self.max_length)  # 中间步的 return
+                            v_last = batch_value[:, -1, 0]   # [B]
+                            v_first = batch_value[:, 0, 0]   # [B]
+                            advantage = mid_return + v_last - v_first  # [B], V_{t+H}-V_t
+                            positive_score = self.get_positive_score(advantage, batch["intervention"])
+                            loss = self.model.compute_loss(batch_for_loss, is_positive=positive_score, obs_preprocessed=True)
                             val_losses.append(loss)
                             if (cfg.training.max_val_steps is not None) \
                                 and batch_idx >= (cfg.training.max_val_steps-1):
@@ -402,7 +494,7 @@ class RTC_DPWorkspace(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem)
 
 def main(cfg):
-    workspace = RTC_DPWorkspace(cfg)
+    workspace = sigRecapWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":
