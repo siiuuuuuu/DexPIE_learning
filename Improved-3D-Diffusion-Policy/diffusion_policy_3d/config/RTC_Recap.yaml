@@ -19,14 +19,17 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 use_image: true
-value_critic_ckpt_path: /home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0311_seed0/checkpoints/latest.ckpt
+value_critic_ckpt_path: /home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0322_seed0/checkpoints/latest.ckpt
+advantage_quantiles_json_path: ${task.dataset.zarr_path}/advantage_quantiles.json
+advantage_quantile_low: 0.6
+advantage_quantile_high: 0.8
 policy:
   _target_: diffusion_policy_3d.policy.RTC_Recap.RTCRecapPolicy
 
   condition_type: film
   diffusion_step_embed_dim: 128
   down_dims: [256, 512, 1024]
-  max_latency_steps: 3
+  max_latency_steps: 4
   cond_dropout_prob: 0.9 # 前缀填充dropout概率
   positive_cond_drop_prob: 0.3
   positive_cfg_scale: 2.0

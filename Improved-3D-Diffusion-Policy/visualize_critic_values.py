@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Visualize frame-wise critic value on random trajectories."
+        description="Visualize frame-wise critic value on selected trajectories."
     )
     parser.add_argument(
         "--critic_ckpt",
@@ -41,7 +41,19 @@ def parse_args():
         "--num_trajectories",
         type=int,
         default=5,
-        help="Number of random trajectories to visualize.",
+        help="Number of random trajectories to visualize when episode range is not specified.",
+    )
+    parser.add_argument(
+        "--episode_start",
+        type=int,
+        default=None,
+        help="Inclusive start episode id (0-based).",
+    )
+    parser.add_argument(
+        "--episode_end",
+        type=int,
+        default=None,
+        help="Inclusive end episode id (0-based).",
     )
     parser.add_argument(
         "--seed",
@@ -120,16 +132,38 @@ def main():
     if n_episodes <= 0:
         raise ValueError(f"empty dataset: {zarr_path}")
 
-    num_trajectories = min(args.num_trajectories, n_episodes)
-    if num_trajectories < args.num_trajectories:
+    use_episode_range = args.episode_start is not None or args.episode_end is not None
+    if use_episode_range:
+        episode_start = 0 if args.episode_start is None else args.episode_start
+        episode_end = (n_episodes - 1) if args.episode_end is None else args.episode_end
+        if episode_start < 0 or episode_end < 0:
+            raise ValueError("episode_start and episode_end must be non-negative.")
+        if episode_start > episode_end:
+            raise ValueError(
+                f"episode_start ({episode_start}) must be <= episode_end ({episode_end})."
+            )
+        if episode_start >= n_episodes or episode_end >= n_episodes:
+            raise ValueError(
+                f"episode range [{episode_start}, {episode_end}] is out of bound for "
+                f"dataset with {n_episodes} episodes (max id: {n_episodes - 1})."
+            )
+        sampled_episode_ids = list(range(episode_start, episode_end + 1))
         cprint(
-            f"[Info] dataset has only {n_episodes} episodes, using {num_trajectories}.",
-            "yellow",
+            f"[Info] using contiguous episodes [{episode_start}, {episode_end}] "
+            f"(count={len(sampled_episode_ids)}).",
+            "cyan",
         )
+    else:
+        num_trajectories = min(args.num_trajectories, n_episodes)
+        if num_trajectories < args.num_trajectories:
+            cprint(
+                f"[Info] dataset has only {n_episodes} episodes, using {num_trajectories}.",
+                "yellow",
+            )
 
-    rng = random.Random(args.seed)
-    sampled_episode_ids = rng.sample(range(n_episodes), k=num_trajectories)
-    cprint(f"[Info] sampled episodes: {sampled_episode_ids}", "cyan")
+        rng = random.Random(args.seed)
+        sampled_episode_ids = rng.sample(range(n_episodes), k=num_trajectories)
+        cprint(f"[Info] sampled episodes: {sampled_episode_ids}", "cyan")
 
     obs_meta = cfg.shape_meta.obs
     use_image = "image" in obs_meta
@@ -193,7 +227,12 @@ def main():
         plt.plot(frame_ids, values, linewidth=1.8, label=f"episode {ep_idx} (T={len(values)})")
     plt.xlabel("Frame")
     plt.ylabel("Predicted Value")
-    plt.title("Critic Value Along Frames (Random Trajectories)")
+    if use_episode_range:
+        plt.title(
+            f"Critic Value Along Frames (Episodes {sampled_episode_ids[0]}-{sampled_episode_ids[-1]})"
+        )
+    else:
+        plt.title("Critic Value Along Frames (Random Trajectories)")
     plt.grid(alpha=0.3)
     plt.legend()
     plt.tight_layout()

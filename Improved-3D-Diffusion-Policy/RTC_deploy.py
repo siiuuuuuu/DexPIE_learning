@@ -88,7 +88,7 @@ def main(cfg: OmegaConf):
     # task = "pour"
     roll_out_length = roll_out_length_dict[task]
     tools=MATHTOOLS()
-    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/task1")
+    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/task1_iter2")
     os.makedirs(data_dir, exist_ok=True)
     dt=1/25
     img_size = 256
@@ -135,6 +135,8 @@ def main(cfg: OmegaConf):
     qpos =agent_state_dict['joint_positions']
     np_qpos = np.stack([qpos], axis=0)[None, ...]
     np_obs_img = np.stack([obs_img], axis=0)[None, ...]
+    if use_wrist_img:
+        np_obs_wrist_img = np.stack([obs_wrist_img], axis=0)[None, ...]
     agent_mat = agent_state_dict["mat"]
     robot_state_array.append(np.concatenate((qpos, agent_mat)))
     policy_ref_mat = tools.xyz_rotvec_to_mat(agent_mat)
@@ -143,6 +145,8 @@ def main(cfg: OmegaConf):
         "image": np_obs_img,
         "exc_action": None,
     }#shape B,T,C,H,W
+    if use_wrist_img:
+        obs_dict["wrist_img"] = np_obs_wrist_img
 
     step_count = 0
     action=ray.get(RTC_policy.inference.remote(obs_dict))#阻塞
@@ -167,11 +171,14 @@ def main(cfg: OmegaConf):
                     obs_img = cam_dict['front_color']
                     color_array.append(obs_img)
                     if use_wrist_img:
-                        wrist_color_array.append(cam_dict['right_color'])
+                        obs_wrist_img = cam_dict['right_color']
+                        wrist_color_array.append(obs_wrist_img)
                     agent_state_dict = arm_comm.get_robot_state()
                     qpos =agent_state_dict['joint_positions']
                     np_qpos = np.stack([qpos], axis=0)[None, ...]
                     np_obs_img = np.stack([obs_img], axis=0)[None, ...]
+                    if use_wrist_img:
+                        np_obs_wrist_img = np.stack([obs_wrist_img], axis=0)[None, ...]
                     agent_mat = agent_state_dict["mat"]
                     robot_state_array.append(np.concatenate((qpos, agent_mat)))
                     current_arm_mat = tools.xyz_rotvec_to_mat(agent_mat) #当前观测的位姿
@@ -179,6 +186,8 @@ def main(cfg: OmegaConf):
                 if i == action_horizon-max_latency_step: #执行到只剩最大延迟步数时，用当前观测更新policy
                     obs_dict['agent_pos'] = np_qpos
                     obs_dict['image'] = np_obs_img
+                    if use_wrist_img:
+                        obs_dict['wrist_img'] = np_obs_wrist_img
                     policy_ref_mat = current_arm_mat #更新策略基于的位姿 policy_ref_mat，后续需要使用
                     exc_arm_mats = np.einsum(
                         "ij,tjk->tik",

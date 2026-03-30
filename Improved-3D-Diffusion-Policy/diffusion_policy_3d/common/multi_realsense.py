@@ -225,7 +225,7 @@ def init_given_realsense_D415(
             intrinsics.width,
             intrinsics.height,
             intrinsics.fx,
-            intrinsics.fpy,
+            intrinsics.fy,
             intrinsics.ppx,
             intrinsics.ppy,
         )
@@ -451,7 +451,7 @@ class MultiRealSense(object):
                             use_grid_sampling=use_grid_sampling, use_crop=use_crop, img_size=img_size)
         if use_right_cam:
             self.right_process = SingleVisionProcess(self.devices[right_cam_idx], self.right_queue,
-                    enable_rgb=True, enable_depth=True, enable_pointcloud=True, sync_mode=1,
+                    enable_rgb=True, enable_depth=False, enable_pointcloud=False, sync_mode=1,
                         num_points=right_num_points, z_far=right_z_far, z_near=right_z_near, 
                         use_grid_sampling=use_grid_sampling, use_crop=use_crop, img_size=img_size)
 

@@ -8,6 +8,7 @@ if __name__ == "__main__":
     os.chdir(ROOT_DIR)#更改工作目录为该根目录，确保所有相对路径都是基于该根目录的
 
 import os
+import json
 import hydra
 import torch
 from omegaconf import OmegaConf
@@ -62,6 +63,9 @@ class RecapWorkspace(BaseWorkspace):
         self.epoch = 0
         self.ratio = cfg.training.ratio
         self.value_critic: ValueCritic = None
+        self.adv_q_low = None
+        self.adv_q_high = None
+        self.advantage_quantiles_path = None
 
     def _load_frozen_value_critic(self, cfg: OmegaConf, device: torch.device):
         ckpt_path = cfg.get('value_critic_ckpt_path', None)
@@ -85,9 +89,79 @@ class RecapWorkspace(BaseWorkspace):
         self.max_length = critic_cfg.get('max_length', critic_cfg.task.dataset.max_length)
         cprint(f"[ValueCritic] loaded and frozen from: {ckpt_path}", "cyan")
 
+    def _extract_quantile_threshold(self, stats_payload, target_q: float):
+        quantile_list = stats_payload.get("advantage_quantiles", [])
+        for item in quantile_list:
+            if not isinstance(item, dict):
+                continue
+            q = item.get("quantile", None)
+            thr = item.get("advantage_threshold", None)
+            if q is None or thr is None:
+                continue
+            if abs(float(q) - float(target_q)) < 1e-6:
+                return float(thr)
+
+        key = f"q{target_q:.1f}"
+        if key in stats_payload:
+            return float(stats_payload[key])
+
+        available_q = []
+        for item in quantile_list:
+            if isinstance(item, dict) and ("quantile" in item):
+                try:
+                    available_q.append(float(item["quantile"]))
+                except Exception:
+                    pass
+        raise ValueError(
+            f"Cannot find quantile {target_q:.3f} in {self.advantage_quantiles_path}. "
+            f"Available quantiles: {available_q}"
+        )
+
+    def _load_advantage_quantiles(self, cfg: OmegaConf):
+        stats_path = cfg.get("advantage_quantiles_json_path", None)
+        if stats_path is None:
+            raise ValueError(
+                "Missing `advantage_quantiles_json_path` in config. "
+                "Please provide advantage quantile json path for Recap training."
+            )
+        stats_path = pathlib.Path(hydra.utils.to_absolute_path(str(stats_path))).expanduser()
+        if not stats_path.is_file():
+            raise ValueError(f"Advantage quantiles json file not found: {stats_path}")
+
+        self.advantage_quantiles_path = str(stats_path)
+
+        quantile_low = float(cfg.get("advantage_quantile_low", 0.6))
+        quantile_high = float(cfg.get("advantage_quantile_high", 0.8))
+
+        with stats_path.open("r", encoding="utf-8") as f:
+            stats_payload = json.load(f)
+
+        q_low = self._extract_quantile_threshold(stats_payload, quantile_low)
+        q_high = self._extract_quantile_threshold(stats_payload, quantile_high)
+
+        if q_high <= q_low:
+            raise ValueError(
+                f"Invalid quantile thresholds in {stats_path}: "
+                f"q{quantile_high:.1f}={q_high} must be larger than q{quantile_low:.1f}={q_low}."
+            )
+
+        self.adv_q_low = q_low
+        self.adv_q_high = q_high
+
+        cprint(
+            (
+                "[AdvQuant] loaded from: "
+                f"{stats_path}, q{quantile_low:.1f}={q_low:.6f}, "
+                f"q{quantile_high:.1f}={q_high:.6f}"
+            ),
+            "cyan",
+        )
+
     def get_positive_mask(self, advantage: torch.Tensor):
-        quantile_thr = torch.quantile(advantage.detach(), 1 - self.ratio)
-        is_positive = (advantage > 0) & (advantage > quantile_thr)
+        if self.adv_q_low is None:
+            raise RuntimeError("Advantage quantiles are not loaded. Call `_load_advantage_quantiles` first.")
+        quantile_thr = torch.as_tensor(self.adv_q_low, device=advantage.device, dtype=advantage.dtype)
+        is_positive = advantage > quantile_thr
         return is_positive, quantile_thr
 
     def _prepare_obs_once(self, obs_dict):
@@ -187,6 +261,7 @@ class RecapWorkspace(BaseWorkspace):
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
         self._load_frozen_value_critic(cfg, device)
+        self._load_advantage_quantiles(cfg)
 
         # save batch for sampling
         train_sampling_batch = None
@@ -224,10 +299,12 @@ class RecapWorkspace(BaseWorkspace):
                     batch_for_loss['obs'] = obs_for_loss
                     
                     batch_value = self.value_critic(obs_for_loss, obs_preprocessed=True)  # [B,T,1]
-                    mid_return = -((cfg.horizon - 1) / self.max_length)  # 中间步的 return
+                    valid_steps = batch["mask"].float().sum(dim=-1).clamp(min=1.0, max=float(batch_value.shape[1]))  # [B]
+                    valid_offset = valid_steps - 1.0
+                    mid_return = -(valid_offset / self.max_length)  # [B]
                     v_last = batch_value[:, -1, 0]   # [B]
                     v_first = batch_value[:, 0, 0]   # [B]
-                    advantage = mid_return + v_last - v_first  # [B], V_{t+H}-V_t
+                    advantage = mid_return + v_last - v_first  # [B], V_{t+valid}-V_t
                     is_positive, quantile_thr = self.get_positive_mask(advantage)
                     adv_det = advantage.detach()
                     adv_mean = adv_det.mean().item()
@@ -303,10 +380,12 @@ class RecapWorkspace(BaseWorkspace):
                             batch_for_loss = batch.copy()
                             batch_for_loss['obs'] = obs_for_loss
                             batch_value = self.value_critic(obs_for_loss, obs_preprocessed=True)  # [B,T,1]
-                            mid_return = -((cfg.horizon - 1) / self.max_length)  # 中间步的 return
+                            valid_steps = batch["mask"].float().sum(dim=-1).clamp(min=1.0, max=float(batch_value.shape[1]))  # [B]
+                            valid_offset = valid_steps - 1.0
+                            mid_return = -(valid_offset / self.max_length)  # [B]
                             v_last = batch_value[:, -1, 0]   # [B]
                             v_first = batch_value[:, 0, 0]   # [B]
-                            advantage = mid_return + v_last - v_first  # [B], V_{t+H}-V_t
+                            advantage = mid_return + v_last - v_first  # [B], V_{t+valid}-V_t
                             is_positive, _ = self.get_positive_mask(advantage)
                             loss = self.model.compute_loss(batch_for_loss, is_positive=is_positive, obs_preprocessed=True)
                             val_losses.append(loss)

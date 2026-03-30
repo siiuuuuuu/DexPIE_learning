@@ -20,6 +20,9 @@ obs_as_global_cond: True
 
 use_image: true
 value_critic_ckpt_path: /home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0311_seed0/checkpoints/latest.ckpt
+advantage_quantiles_json_path: ${task.dataset.zarr_path}/advantage_quantiles.json
+advantage_quantile_low: 0.6
+advantage_quantile_high: 0.8
 policy:
   _target_: diffusion_policy_3d.policy.Recap.RecapPolicy
   

@@ -102,7 +102,7 @@ def main(cfg: OmegaConf):
     RTC_policy = async_policy.remote(policy)
     max_latency_step = int(getattr(policy, 'max_latency_steps', 3))
 
-    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/task1")
+    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/task2_iter1")
     os.makedirs(data_dir, exist_ok=True)
 
     trackertoTCPmat = np.array([
@@ -131,7 +131,7 @@ def main(cfg: OmegaConf):
     time.sleep(1)
     hand_comm.reset()
     time.sleep(1)
-    hand_comm.setpower(500, 500, 500, 500, 500)
+    hand_comm.setpower(600, 600, 600, 600, 600)
     hand_comm.setspeed(300, 300, 300, 300, 300)
 
     if first_init:

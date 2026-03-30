@@ -15,7 +15,7 @@ num_bins: 201
 v_min: -1
 v_max:  0
 max_length: 1000
-fail_rate: 0.8 #尽量让失败轨迹的价值比最慢的轨迹价值低
+fail_rate: 0.9 #尽量让失败轨迹的价值比最慢的轨迹价值低
 use_image: true
 policy:
   _target_: diffusion_policy_3d.policy.value_critic.ValueCritic
@@ -50,14 +50,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 128
+  batch_size: 64
   num_workers: 8
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 128
+  batch_size: 64
   num_workers: 8
   shuffle: False
   pin_memory: True
@@ -75,11 +75,12 @@ training:
   seed: 42
   debug: False
   resume: False
+  init_ckpt_path: null  # 可选：用于迭代训练的外部ckpt路径；null或空字符串表示不加载
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 301
+  num_epochs: 201
   gradient_accumulate_every: 1
-  use_ema: True
+  use_ema: False
   rollout_every: 200
   checkpoint_every: 100
   val_every: 100

@@ -31,7 +31,7 @@ class RecapDatasetImage(BaseDataset):
             use_relative_action=True,
             ):
         super().__init__()
-        cprint(f'Loading GR1DexDataset from {zarr_path}', 'green')
+        cprint(f'Loading RecapDatasetImage from {zarr_path}', 'green')
         self.task_name = task_name
         self.use_act_normal = use_act_normal
         self.use_img = use_img

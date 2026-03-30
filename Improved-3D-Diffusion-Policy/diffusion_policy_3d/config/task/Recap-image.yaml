@@ -7,6 +7,10 @@ shape_meta: &shape_meta #可以在其它地方引用这整个层级参数，包�
       shape: [3, 224, 224]
       type: rgb
       horizon: ${n_obs_steps}
+    wrist_img:
+      shape: [3, 224, 224]
+      type: rgb
+      horizon: ${n_obs_steps}
     agent_pos:
       shape: [6]
       type: low_dim
@@ -29,6 +33,6 @@ dataset:
   max_train_episodes: 500
   use_act_normal: False
   use_img: true
-  use_wrist_img: false
+  use_wrist_img: true
   use_depth: false
   use_relative_action: true

@@ -59,14 +59,57 @@ class CriticWorkspace(BaseWorkspace):
         self.global_step = 0
         self.epoch = 0
 
+    def _load_init_checkpoint(self, cfg: OmegaConf):
+        init_ckpt_path = cfg.training.get("init_ckpt_path", None)
+        if init_ckpt_path is None:
+            return False
+        init_ckpt_path = str(init_ckpt_path).strip()
+        if len(init_ckpt_path) == 0:
+            return False
+
+        ckpt_path = pathlib.Path(hydra.utils.to_absolute_path(init_ckpt_path)).expanduser()
+        if not ckpt_path.is_file():
+            raise ValueError(f"Init checkpoint file not found: {ckpt_path}")
+
+        # Warm-start from another run: only load model/ema weights.
+        # Keep optimizer/global_step/epoch/output_dir for the new run.
+        exclude_keys = ["optimizer"]
+        if self.ema_model is None:
+            exclude_keys.append("ema_model")
+        self.load_checkpoint(
+            path=ckpt_path,
+            exclude_keys=tuple(exclude_keys),
+            include_keys=()
+        )
+        cprint(
+            f"[InitCkpt] loaded model weights from: {ckpt_path} "
+            "(optimizer/global_step/epoch are not restored)",
+            "cyan"
+        )
+        return True
+
     def run(self):
         cfg = copy.deepcopy(self.cfg)
+        init_ckpt_path = cfg.training.get("init_ckpt_path", None)
+        has_init_ckpt = init_ckpt_path is not None and len(str(init_ckpt_path).strip()) > 0
+
         # resume training
+        resumed = False
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+                resumed = True
+                if has_init_ckpt:
+                    cprint(
+                        "[InitCkpt] training.resume=True and latest.ckpt exists; "
+                        "skip training.init_ckpt_path.",
+                        "yellow"
+                    )
+
+        if not resumed:
+            self._load_init_checkpoint(cfg)
 
         # configure dataset
         dataset: BaseImageDataset
