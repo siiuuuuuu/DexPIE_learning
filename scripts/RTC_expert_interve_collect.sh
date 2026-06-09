@@ -1,11 +1,11 @@
 # Examples:
 #RTC策略的专家干预脚本
 
-# bash scripts/RTC_expert_interve_collect.sh RTC_dp_224x224_r3m gr1_dex-image 0310
+# bash scripts/RTC_expert_interve_collect.sh RTC_dp_224x224_r3m dp-image 0310
 # bash scripts/RTC_expert_interve_collect.sh RTC_Recap Recap-image 0312
 
-wandb_mode=online
-#dataset_path=/home/ze/projects/Improved-3D-Diffusion-Policy/training_data_example
+wandb_mode=offline
+#dataset_path=/home/ze/projects/DexPIE/training_data_example
 #dataset_path=/home/lrz/dp_data/train_data
 dataset_path=/home/lrz/dp_data/train_yangfang_1_data
 
@@ -25,7 +25,7 @@ gpu_id=0
 echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"
 
 
-cd Improved-3D-Diffusion-Policy
+cd DexPIE
 
 sudo chmod 666 /dev/ttyUSB0
 

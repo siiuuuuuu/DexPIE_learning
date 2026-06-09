@@ -1,17 +1,10 @@
 # Examples:
 
-#   bash scripts/train_policy.sh dp_224x224_r3m gr1_dex-image 0114_example
-#   bash scripts/train_policy.sh RTC_dp_224x224_r3m gr1_dex-image 0310
-#   bash scripts/train_policy.sh Recap Recap-image 0312
+#   bash scripts/train_policy.sh RTC_dp_224x224_r3m dp-image 0310
 #   bash scripts/train_policy.sh RTC_Recap Recap-image 0313
 #   bash scripts/train_policy.sh RTC_sigRecap Recap-image 0319
-#   bash scripts/train_policy.sh RecapNFT Recap-image 0315
-#   bash scripts/train_policy.sh RTC_RecapNFT Recap-image 0316
-#   bash scripts/train_policy.sh flow_224x224_Dino gr1_dex-image 0114_example
-#   bash scripts/train_policy.sh flow_224x224_clip gr1_dex-image 0114_example
-#   bash scripts/train_policy.sh flow_224x224_transformer gr1_dex-image 0114_example
 
-#dataset_path=/home/ze/projects/Improved-3D-Diffusion-Policy/training_data_example
+#dataset_path=/home/ze/projects/DexPIE/training_data_example
 #dataset_path=/home/lrz/dp_data/train_data
 dataset_path=/home/lrz/dp_data/task1_Recap_iter1
 DEBUG=False
@@ -42,7 +35,7 @@ else
 fi
 
 
-cd Improved-3D-Diffusion-Policy
+cd DexPIE
 
 export HYDRA_FULL_ERROR=1 
 export CUDA_VISIBLE_DEVICES=${gpu_id}

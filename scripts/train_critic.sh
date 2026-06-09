@@ -3,7 +3,7 @@
 
 #   bash scripts/train_critic.sh critic value_image 0311
 
-#dataset_path=/home/ze/projects/Improved-3D-Diffusion-Policy/training_data_example
+#dataset_path=/home/ze/projects/DexPIE/training_data_example
 dataset_path=/home/lrz/dp_data/task1_Recap_iter1
 
 DEBUG=False
@@ -34,7 +34,7 @@ else
 fi
 
 
-cd Improved-3D-Diffusion-Policy
+cd DexPIE
 
 export HYDRA_FULL_ERROR=1 
 export CUDA_VISIBLE_DEVICES=${gpu_id}

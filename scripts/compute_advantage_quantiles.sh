@@ -4,7 +4,7 @@
 #   bash scripts/compute_advantage_quantiles.sh /path/to/latest.ckpt /path/to/dataset.zarr
 #   bash scripts/compute_advantage_quantiles.sh /path/to/latest.ckpt /path/to/dataset.zarr RTC_sigRecap Recap-image 0 "[30,40,10,50,20]" advantage_quantiles.json
 
-critic_ckpt=${1:-/home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0322_seed0/checkpoints/latest.ckpt}
+critic_ckpt=${1:-/home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0322_seed0/checkpoints/latest.ckpt}
 dataset_path=${2:-/home/lrz/dp_data/task1_Recap_iter2}
 config_name=${3:-RTC_sigRecap}
 task_name=${4:-Recap-image}
@@ -18,7 +18,7 @@ echo -e "\033[33mcritic ckpt: ${critic_ckpt}\033[0m"
 echo -e "\033[33mdataset: ${dataset_path}\033[0m"
 echo -e "\033[33mtop percentages: ${top_percentages}\033[0m"
 
-cd Improved-3D-Diffusion-Policy
+cd DexPIE
 
 export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=${gpu_id}
