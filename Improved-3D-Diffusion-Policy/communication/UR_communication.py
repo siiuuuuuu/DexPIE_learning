@@ -29,7 +29,8 @@ class UR_Comm:
         self.lookahead_time = lookahead_time      # 平滑时间 (0.03-0.2之间)
         self.gain = gain                # 比例增益 (100-2000之间)
 
-        self.initial_pose =[0.248,0.1212,0.3978,1.16,1.25,1.28] #210
+        #self.initial_pose =[0.248,0.1212,0.3978,1.16,1.25,1.28]
+        self.initial_pose =[0.248,0.0812,0.3978,1.16,1.25,1.28]
 
     def cleanup(self):
         """Cleanup RTDE connections"""

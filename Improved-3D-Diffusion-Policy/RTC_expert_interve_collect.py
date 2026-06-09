@@ -68,7 +68,7 @@ def main(cfg: OmegaConf):
             f"[Warning] 当前 workspace={workspace.__class__.__name__}，建议使用 RTC_DPWorkspace 配置。",
             "yellow"
         )
-
+    #cprint(f" 当前cfg强度={cfg.policy.positive_cfg_scale}")
     use_image = True
     use_point_cloud = False
     use_wrist_img = bool(cfg.task.dataset.use_wrist_img)
@@ -102,7 +102,7 @@ def main(cfg: OmegaConf):
     RTC_policy = async_policy.remote(policy)
     max_latency_step = int(getattr(policy, 'max_latency_steps', 3))
 
-    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/task2_iter1")
+    data_dir = os.path.expanduser("~/dp_data/offlineRL_data/new_task1_iter1")
     os.makedirs(data_dir, exist_ok=True)
 
     trackertoTCPmat = np.array([
@@ -131,7 +131,7 @@ def main(cfg: OmegaConf):
     time.sleep(1)
     hand_comm.reset()
     time.sleep(1)
-    hand_comm.setpower(600, 600, 600, 600, 600)
+    hand_comm.setpower(500, 500, 500, 500, 500)
     hand_comm.setspeed(300, 300, 300, 300, 300)
 
     if first_init:
@@ -141,7 +141,7 @@ def main(cfg: OmegaConf):
         time.sleep(0.5)
         print("Robot reset!")
 
-    max_task_length = 1000  # 每个任务必须指定最大长度，其作为奖励计算归一化参数
+    max_task_length = 1600  # 每个任务必须指定最大长度，其作为奖励计算归一化参数
 
     try:
         while not complete_collect.is_set():

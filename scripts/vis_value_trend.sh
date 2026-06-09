@@ -5,14 +5,15 @@
 #   bash scripts/vis_value_trend.sh /path/to/latest.ckpt /path/to/dataset.zarr 5 42 visualizations/value_trend.png 64
 #   bash scripts/vis_value_trend.sh /path/to/latest.ckpt /path/to/dataset.zarr 5 42 visualizations/value_trend.png 64 30 50
 #/home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0322_seed0/checkpoints/latest.ckpt
-critic_ckpt=${1:-/home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0327_iter2_seed0/checkpoints/latest.ckpt}
-zarr_path=${2:-/home/lrz/dp_data/task1_value_trend_demo_zarr}
-num_trajectories=${3:-10}
-seed=${4:-6}
+critic_ckpt=${1:-/home/lrz/project/Improved-3D-Diffusion-Policy/Improved-3D-Diffusion-Policy/data/outputs/value_image-critic-0408_task2_iter1_seed0/checkpoints/latest.ckpt}
+zarr_path=${2:-/home/lrz/dp_data/task2_Recap_iter1}
+num_trajectories=${3:-2}
+seed=${4:-8}
 output_path=${5:-visualizations/critic_value_random_trajectories.png}
-chunk_size=${6:-32}
-episode_start=${7:-0}
-episode_end=${8:-3}
+chunk_size=${6:-128}
+episode_start=${7:-42}
+episode_end=${8:-48}
+
 
 cd Improved-3D-Diffusion-Policy
 
