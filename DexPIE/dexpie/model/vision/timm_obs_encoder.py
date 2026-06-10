@@ -9,6 +9,7 @@ import torchvision
 import logging
 from termcolor import cprint
 
+from dexpie.common.import_util import load_r3m_model
 from dexpie.model.common.module_attr_mixin import ModuleAttrMixin
 
 from dexpie.common.pytorch_util import replace_submodules
@@ -86,8 +87,7 @@ class TimmObsEncoder(ModuleAttrMixin):
         assert global_pool == ''
         
         if model_name == "r3m":
-            from r3m import load_r3m
-            model = load_r3m("resnet18", pretrained=pretrained) # resnet18, resnet34
+            model = load_r3m_model("resnet18", pretrained=pretrained) # resnet18, resnet34
             model.eval()#非常重要不然根本无法work,batchnorm层很关键
             cprint(f"Loaded R3M model using {model_name}. pretrained={pretrained}", 'green')
         else:

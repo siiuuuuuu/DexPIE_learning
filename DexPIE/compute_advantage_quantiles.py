@@ -36,7 +36,7 @@ def resolve_device(cfg_device: str) -> torch.device:
 
 
 def prepare_obs_once(obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-    # Keep exactly the same preprocessing as sigRecap_workspace.
+    # Keep exactly the same preprocessing as dexpie_workspace.
     nobs = obs_dict.copy()
     image = nobs["image"] / 255.0
     if image.shape[-1] == 3:
@@ -90,7 +90,7 @@ def parse_top_percentages(cfg: OmegaConf) -> List[float]:
 
 @hydra.main(
     config_path=str(pathlib.Path(__file__).parent.joinpath("dexpie", "config")),
-    config_name="RTC_sigRecap",
+    config_name="DexPIE",
 )
 def main(cfg: OmegaConf):
     OmegaConf.resolve(cfg)
@@ -124,7 +124,7 @@ def main(cfg: OmegaConf):
     cprint(f"[Info] dataset size: {len(dataset)}", "cyan")
     cprint(f"[Info] critic ckpt: {ckpt_path}", "cyan")
     cprint(f"[Info] use EMA critic: {use_ema}", "cyan")
-    cprint("[Info] mid_return is computed from per-sample valid steps (mask).", "cyan")
+    cprint(f"[Info] max_length: {max_length}", "cyan")
 
     with torch.inference_mode():
         for batch in tqdm.tqdm(dataloader, desc="Collect advantages"):

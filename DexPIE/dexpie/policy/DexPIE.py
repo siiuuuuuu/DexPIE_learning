@@ -18,7 +18,7 @@ from dexpie.model.diffusion.advantage_positional_embedding import AdvantageSinus
 import numpy as np
 
 
-class RTCsigRecapPolicy(BasePolicy):
+class DexPIEPolicy(BasePolicy):
     def __init__(self,
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
@@ -397,7 +397,7 @@ class RTCsigRecapPolicy(BasePolicy):
         nactions = self.normalizer['action'].normalize(batch['action'])
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
-        # intervention->1 mapping is handled in sigRecap_workspace.
+        # intervention->1 mapping is handled in dexpie_workspace.
         is_positive = is_positive.to(device=nactions.device, dtype=nactions.dtype).reshape(batch_size)
         positive_embedding = self.is_positive_embedding(is_positive).reshape(batch_size, -1)  # [B, emb]
 

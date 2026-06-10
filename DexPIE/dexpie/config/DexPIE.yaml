@@ -3,7 +3,7 @@ defaults:
   - task: Recap_image
 
 name: train_diffusion_unet_hybrid
-_target_: dexpie.workspace.sigRecap_workspace.sigRecapWorkspace
+_target_: dexpie.workspace.dexpie_workspace.DexPIEWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -23,10 +23,10 @@ value_critic_ckpt_path: /home/lrz/project/DexPIE/DexPIE/data/outputs/value_image
 advantage_quantiles_json_path: ${task.dataset.zarr_path}/advantage_quantiles.json
 advantage_quantile_low: 0.6
 advantage_quantile_high: 0.8
-advantage_beta_divisor: 6  # 可改为4.0，让top-40%更硬
+advantage_beta_divisor: 5  # 可改为6.0，让top-40%更硬
 advantage_beta_min: 1.0e-6
 policy:
-  _target_: dexpie.policy.RTC_sigRecap.RTCsigRecapPolicy  #RTC_sigRecap.RTCsigRecapPolicy
+  _target_: dexpie.policy.DexPIE.DexPIEPolicy  #DexPIE.DexPIEPolicy
 
   condition_type: film
   diffusion_step_embed_dim: 128

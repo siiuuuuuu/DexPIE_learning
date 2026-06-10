@@ -8,9 +8,22 @@ import torch.nn.functional as F
 import torchvision
 import logging
 from termcolor import cprint
+from dexpie.common.import_util import load_r3m_model
 from dexpie.model.common.module_attr_mixin import ModuleAttrMixin
 
 logger = logging.getLogger(__name__)
+
+
+class TrainOnlyTransform(nn.Module):
+    def __init__(self, transform: nn.Module):
+        super().__init__()
+        self.transform = transform
+
+    def forward(self, x):
+        if self.training and torch.is_grad_enabled():
+            return self.transform(x)
+        return x
+
 
 #给critic_head使用
 class ResidualBlock(nn.Module):
@@ -61,8 +74,7 @@ class ValueNet(ModuleAttrMixin):
         self.output_feat_dim = 0
         
         if model_name == "r3m":
-            from r3m import load_r3m
-            model = load_r3m("resnet18", pretrained=pretrained) # resnet18, resnet34
+            model = load_r3m_model("resnet18", pretrained=pretrained) # resnet18, resnet34
             model.eval()#非常重要不然根本无法work,batchnorm层很关键
             cprint(f"Loaded R3M model using {model_name}. pretrained={pretrained}", 'green')
         else:
@@ -91,7 +103,12 @@ class ValueNet(ModuleAttrMixin):
                 torchvision.transforms.RandomCrop(size=int(image_shape[0] * ratio)),
                 torchvision.transforms.Resize(size=image_shape[0], antialias=True)
             ] + transforms[1:]
-        transform = nn.Identity() if transforms is None else torch.nn.Sequential(*transforms)
+        if transforms is None:
+            transform = nn.Identity()
+        else:
+            # torchvision random transforms ignore module eval() by default.
+            # Keep critic augmentation for training, but make no-grad inference deterministic.
+            transform = TrainOnlyTransform(torch.nn.Sequential(*transforms))
 
         for key, attr in obs_shape_meta.items():
             shape = tuple(attr['shape'])

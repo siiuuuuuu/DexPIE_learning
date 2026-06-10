@@ -5,7 +5,6 @@
 # bash scripts/RTC_expert_interve_collect.sh RTC_Recap Recap-image 0312
 
 wandb_mode=offline
-#dataset_path=/home/ze/projects/DexPIE/training_data_example
 #dataset_path=/home/lrz/dp_data/train_data
 dataset_path=/home/lrz/dp_data/train_yangfang_1_data
 

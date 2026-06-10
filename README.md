@@ -73,7 +73,7 @@ Then you can train the policy.
 
 **Train.** The script to train policy:
 
-    bash scripts/train_policy.sh RTC_dp_224x224_r3m dp-image 0913_example
+    bash scripts/train_policy.sh DexPIE Recap-image 0913_example
 
 ## BibTeX
 

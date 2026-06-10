@@ -24,7 +24,7 @@ from termcolor import cprint
 import shutil
 from dexpie.workspace.base_workspace import BaseWorkspace
 from dexpie.workspace.critic_workspace import CriticWorkspace
-from dexpie.policy.RTC_sigRecap import RTCsigRecapPolicy
+from dexpie.policy.DexPIE import DexPIEPolicy
 from dexpie.policy.value_critic import ValueCritic
 from dexpie.dataset.base_dataset import BaseImageDataset
 from dexpie.common.checkpoint_util import TopKCheckpointManager
@@ -35,7 +35,7 @@ from dexpie.model.common.lr_scheduler import get_scheduler
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-class sigRecapWorkspace(BaseWorkspace):
+class DexPIEWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
     exclude_keys = ('value_critic',) # 排除value_critic权重，因为它是在CriticWorkspace中训练的
 
@@ -49,9 +49,9 @@ class sigRecapWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: RTCsigRecapPolicy  = hydra.utils.instantiate(cfg.policy)
+        self.model: DexPIEPolicy  = hydra.utils.instantiate(cfg.policy)
 
-        self.ema_model: RTCsigRecapPolicy = None
+        self.ema_model: DexPIEPolicy = None
         if cfg.training.use_ema:
             self.ema_model = copy.deepcopy(self.model)
         # configure training state
@@ -123,7 +123,7 @@ class sigRecapWorkspace(BaseWorkspace):
         if stats_path is None:
             raise ValueError(
                 "Missing `advantage_quantiles_json_path` in config. "
-                "Please provide advantage quantile json path for sigRecap training."
+                "Please provide advantage quantile json path for DexPIE training."
             )
         stats_path = pathlib.Path(hydra.utils.to_absolute_path(str(stats_path))).expanduser()
         if not stats_path.is_file():
@@ -624,7 +624,7 @@ class sigRecapWorkspace(BaseWorkspace):
     config_name=pathlib.Path(__file__).stem)
 
 def main(cfg):
-    workspace = sigRecapWorkspace(cfg)
+    workspace = DexPIEWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":

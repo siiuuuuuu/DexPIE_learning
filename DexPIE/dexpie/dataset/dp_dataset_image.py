@@ -110,7 +110,6 @@ class DPDatasetImage(BaseDataset):
         return len(self.sampler)
 
     def _sample_to_data(self, sample):
-        #agent_pos = sample['state'][:,].astype(np.float32)#只取所需观察即前n_obs_steps个
         agent_pos = sample['state'][:self.n_obs_steps,:6].astype(np.float32)
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
         #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了
@@ -124,7 +123,7 @@ class DPDatasetImage(BaseDataset):
             arm_action=sample['action'][:,:9]
             pose=self.tools.xyz_6drot_to_mat(arm_action)
             if current_agent_pose.shape[-1]<6: #如果没有提供当前位姿，就用第一个动作位姿作为参考位姿
-                pose_0=pose[0]#每个序列开始时的当前动作位姿为参考位姿
+                pose_0=pose[0]
                 inv_pose_0=self.tools.se3_inverse(pose_0)
             else:
                 pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])#其是xyz+rotvec格式
@@ -150,7 +149,7 @@ class DPDatasetImage(BaseDataset):
         
         data['mask']=sample["mask"]
 
-        return data #四元组 这里就应该obs只使用前n_obs个不然内存占用
+        return data 
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.sampler.sample_sequence(idx)

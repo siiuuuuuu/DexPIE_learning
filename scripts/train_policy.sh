@@ -1,8 +1,8 @@
 # Examples:
 
-#   bash scripts/train_policy.sh RTC_dp_224x224_r3m dp-image 0310
+#   bash scripts/train_policy.sh RTC_dp_224x224_r3m two-image 0310
 #   bash scripts/train_policy.sh RTC_Recap Recap-image 0313
-#   bash scripts/train_policy.sh RTC_sigRecap Recap-image 0319
+#   bash scripts/train_policy.sh DexPIE Recap-image 0319
 
 #dataset_path=/home/ze/projects/DexPIE/training_data_example
 #dataset_path=/home/lrz/dp_data/train_data

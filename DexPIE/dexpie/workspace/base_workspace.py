@@ -4,10 +4,30 @@ import pathlib
 import hydra
 import copy
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 import dill
 import torch
 import threading
+
+
+def migrate_legacy_cfg_targets(cfg: OmegaConf) -> OmegaConf:
+    legacy_prefix = "diffusion_policy_3d."
+    current_prefix = "dexpie."
+
+    def visit(node):
+        if isinstance(node, DictConfig):
+            target = node.get("_target_", None)
+            if isinstance(target, str) and target.startswith(legacy_prefix):
+                with open_dict(node):
+                    node["_target_"] = current_prefix + target[len(legacy_prefix):]
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, ListConfig):
+            for value in node:
+                visit(value)
+
+    visit(cfg)
+    return cfg
 
 
 class BaseWorkspace:
@@ -15,7 +35,7 @@ class BaseWorkspace:
     exclude_keys = tuple()
 
     def __init__(self, cfg: OmegaConf, output_dir: Optional[str]=None):
-        self.cfg = cfg
+        self.cfg = migrate_legacy_cfg_targets(cfg)
         self._output_dir = output_dir
         self._saving_thread = None
 
