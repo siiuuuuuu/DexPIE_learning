@@ -6,7 +6,7 @@ from dexpie.common.replay_buffer import ReplayBuffer
 
 @numba.jit(nopython=True)
 
-# 创建索引，使用padding来确保序列长度一致
+# Create indices and use padding to keep sequence lengths consistent.
 def create_indices(
     episode_ends:np.ndarray, sequence_length:int, 
     episode_mask: np.ndarray,
@@ -17,7 +17,7 @@ def create_indices(
     pad_after = min(max(pad_after, 0), sequence_length-1)
 
     indices = list()
-    for i in range(len(episode_ends)):#遍历每个episode
+    for i in range(len(episode_ends)):# Iterate over each episode.
         if not episode_mask[i]:
             # skip episode
             continue
@@ -25,21 +25,21 @@ def create_indices(
         if i > 0:
             start_idx = episode_ends[i-1]
         end_idx = episode_ends[i]
-        episode_length = end_idx - start_idx #计算当前episode的长度
+        episode_length = end_idx - start_idx # Current episode length.
         
-        min_start = -pad_before #允许的最小起始位置，为负数表示需要过去的观察和动作，当n_obs=1时为0
-        max_start = episode_length - sequence_length + pad_after #允许的最大起始位置，在H=n_action下为episode_length-1
+        min_start = -pad_before # Minimum start index; negative values require past observations/actions.
+        max_start = episode_length - sequence_length + pad_after # Maximum start index; equals episode_length-1 when H=n_action.
         
         # range stops one idx before end
-        for idx in range(min_start, max_start+1):#遍历该episode内所有采样序列的起始位置
-            buffer_start_idx = max(idx, 0) + start_idx#限制在该episode范围内，最小为episode开始位置
-            buffer_end_idx = min(idx+sequence_length, episode_length) + start_idx#最大为该episode的结束位置
+        for idx in range(min_start, max_start+1):# Iterate over all sequence start positions in this episode.
+            buffer_start_idx = max(idx, 0) + start_idx# Clamp to this episode; minimum is episode start.
+            buffer_end_idx = min(idx+sequence_length, episode_length) + start_idx# Clamp to this episode; maximum is episode end.
             start_offset = buffer_start_idx - (idx+start_idx)
             end_offset = (idx+sequence_length+start_idx) - buffer_end_idx
             sample_start_idx = 0 + start_offset
-            #样本中的起始位置，不为0的话，表示前面有padding（如o>1则最开始时只有一个观察没法往前取了只能pad）
+            # Sample start offset; nonzero means leading padding is needed.
             sample_end_idx = sequence_length - end_offset
-            #样本中的结束位置，不等于seq_length，则表明后面有padding，表明到最后片段了只能pad到seq_length
+            # Sample end offset; values below sequence_length mean trailing padding is needed.
             if debug:
                 assert(start_offset >= 0)
                 assert(end_offset >= 0)
@@ -47,7 +47,7 @@ def create_indices(
             indices.append([
                 buffer_start_idx, buffer_end_idx, 
                 sample_start_idx, sample_end_idx])
-    indices = np.array(indices)#即全索引
+    indices = np.array(indices)# Full index array.
     return indices
 
 
@@ -98,7 +98,7 @@ class SequenceSampler:
         if keys is None:
             keys = list(replay_buffer.keys())
         
-        episode_ends = replay_buffer.episode_ends[:]#获取episode结束的索引位置
+        episode_ends = replay_buffer.episode_ends[:]# Episode end indices.
         if episode_mask is None:
             episode_mask = np.ones(episode_ends.shape, dtype=bool)
 
@@ -124,18 +124,18 @@ class SequenceSampler:
         
     def sample_sequence(self, idx):
         buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
-            = self.indices[idx]#采样序列的索引
+            = self.indices[idx]# Sample sequence index.
         result = dict()
 
         mask =np.zeros(self.sequence_length, dtype=bool)
         mask[sample_start_idx:sample_end_idx] = True
-        result['mask'] = mask#后续用来mask掉padding的位置不参与损失计算（只有action需要，而观察基本就一步）
+        result['mask'] = mask# Mask out padded positions from loss computation.
 
         for key in self.keys:
             input_arr = self.replay_buffer[key]
             # performance optimization, avoid small allocation if possible
             if key not in self.key_first_k:
-                sample = input_arr[buffer_start_idx:buffer_end_idx]#直接取出所需数据
+                sample = input_arr[buffer_start_idx:buffer_end_idx]# Directly slice required data.
             else:
                 # performance optimization, only load used obs steps
                 n_data = buffer_end_idx - buffer_start_idx
@@ -149,14 +149,14 @@ class SequenceSampler:
                 except Exception as e:
                     import pdb; pdb.set_trace()
             data = sample
-            if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):#需要padding
+            if (sample_start_idx > 0) or (sample_end_idx < self.sequence_length):# Padding is needed.
                 data = np.zeros(
                     shape=(self.sequence_length,) + input_arr.shape[1:],
                     dtype=input_arr.dtype)
                 if sample_start_idx > 0:
-                    data[:sample_start_idx] = sample[0]#用第一个数据pad前面
+                    data[:sample_start_idx] = sample[0]# Pad the front with the first value.
                 if sample_end_idx < self.sequence_length:
-                    data[sample_end_idx:] = sample[-1]#用最后一个数据pad后面
-                data[sample_start_idx:sample_end_idx] = sample#中间部分直接赋值
+                    data[sample_end_idx:] = sample[-1]# Pad the back with the last value.
+                data[sample_start_idx:sample_end_idx] = sample# Copy the middle region directly.
             result[key] = data
         return result

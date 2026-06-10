@@ -3,9 +3,9 @@ if __name__ == "__main__":
     import os
     import pathlib
 
-    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)#获取根目录
-    sys.path.append(ROOT_DIR)#根目录加入sys.path确保其他模块的导入
-    os.chdir(ROOT_DIR)#更改工作目录为该根目录，确保所有相对路径都是基于该根目录的
+    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)# Get repository root.
+    sys.path.append(ROOT_DIR)# Add root to sys.path so other modules can be imported.
+    os.chdir(ROOT_DIR)# Change working directory to root so relative paths resolve from there.
 
 import os
 import hydra
@@ -53,20 +53,20 @@ class DPWorkspace(BaseWorkspace):
         """""
         optimizer_kwargs = {k: v for k, v in cfg.optimizer.items() if k != '_target_'}
         
-        # 定义参数组
+        # Define parameter groups.
         param_groups = [
             {
                 'params': self.model.obs_encoder.parameters(),
-                'lr': optimizer_kwargs['lr'] / 10  # obsencoder的学习率设为原来的1/10
+                'lr': optimizer_kwargs['lr'] / 10  # Use 1/10 of the original lr for obs_encoder.
             },
             {
                 'params': [p for name, p in self.model.named_parameters() 
-                          if not name.startswith('obs_encoder.')],  # diffusion部分（非obsencoder部分）
-                'lr': optimizer_kwargs['lr']  # diffusion部分保持原来的学习率
+                          if not name.startswith('obs_encoder.')],  # Diffusion parameters excluding obs_encoder.
+                'lr': optimizer_kwargs['lr']  # Keep the original lr for diffusion parameters.
             }
         ]
 
-        # 手动创建优化器实例
+        # Manually create optimizer instance.
         optimizer_class = hydra.utils.get_class(cfg.optimizer._target_)
         self.optimizer = optimizer_class(param_groups, **{k: v for k, v in optimizer_kwargs.items() if k != 'lr'})
         """""
@@ -99,7 +99,7 @@ class DPWorkspace(BaseWorkspace):
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
-        self.model.set_normalizer(normalizer) # 训练时使用的normalizer，其也是nn.Module因此在deploy时也会加载参数并使用
+        self.model.set_normalizer(normalizer) # The training normalizer is an nn.Module, so deploy loads and uses it too.
         if cfg.training.use_ema:
             self.ema_model.set_normalizer(normalizer) 
 

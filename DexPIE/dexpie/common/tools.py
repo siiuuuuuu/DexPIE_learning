@@ -5,7 +5,7 @@ import cv2
 
 class  MATHTOOLS:
     
-    # 从xyzrpy创建旋转矩阵
+    # Create a transformation matrix from xyz+rpy.
     def xyzrpy2Mat(self,x, y, z, roll, pitch, yaw):
         transformation_matrix = np.eye(4)
         A = np.cos(yaw)
@@ -45,14 +45,14 @@ class  MATHTOOLS:
         return [x, y, z, roll, pitch, yaw]
     
     def xyzQuaternion2matrix(x, y, z, qx, qy, qz, qw):
-        # 四元数到旋转矩阵：根据标准公式，将四元数分量转换为一个 3x3 的旋转矩阵。
+        # Convert quaternion components into a 3x3 rotation matrix.
         R = np.array([
             [1 - 2 * (qy ** 2 + qz ** 2), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
             [2 * (qx * qy + qz * qw), 1 - 2 * (qx ** 2 + qz ** 2), 2 * (qy * qz - qx * qw)],
             [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx ** 2 + qy ** 2)]
         ])
         
-        # 构造齐次变换矩阵：在右下角补上 1，在第四列填入位置向量 [x, y, z]。
+        # Build a homogeneous transform with translation [x, y, z].
         T = np.eye(4)
         T[:3, :3] = R
         T[:3, 3] = [x, y, z]
@@ -61,17 +61,17 @@ class  MATHTOOLS:
 
     def rpy_to_rotvec(self,roll: float, pitch: float, yaw: float) -> np.ndarray:
         """
-        将RPY角度(绕X/Y/Z轴旋转)转换为旋转矢量
+        Convert RPY angles around X/Y/Z axes to a rotation vector.
         
-        参数:
-            roll: 绕X轴的旋转角度(弧度)
-            pitch: 绕Y轴的旋转角度(弧度)
-            yaw: 绕Z轴的旋转角度(弧度)
+        Args:
+            roll: Rotation around X axis in radians.
+            pitch: Rotation around Y axis in radians.
+            yaw: Rotation around Z axis in radians.
         
-        返回:
-            旋转矢量 [rx, ry, rz], 方向表示旋转轴, 模长表示旋转角度(弧度)
+        Returns:
+            Rotation vector [rx, ry, rz]; direction is the axis and norm is the angle in radians.
         """
-        # 构建绕各轴的旋转矩阵
+        # Build rotation matrices around each axis.
         R_x = np.array([
             [1, 0, 0],
             [0, np.cos(roll), -np.sin(roll)],
@@ -90,45 +90,45 @@ class  MATHTOOLS:
             [0, 0, 1]
         ])
         
-        # 组合旋转矩阵 (顺序: Z-Y-X)
+        # Compose rotation matrix in Z-Y-X order.
         R = np.dot(R_z, np.dot(R_y, R_x))
         
-        # 从旋转矩阵计算旋转矢量
+        # Compute rotation vector from rotation matrix.
         theta = np.arccos((np.trace(R) - 1) / 2)
         
-        if np.abs(theta) < 1e-10:  # 零旋转
+        if np.abs(theta) < 1e-10:  # Zero rotation.
             return np.array([0, 0, 0])
         else:
-            # 旋转轴
+            # Rotation axis.
             axis = np.array([
                 R[2, 1] - R[1, 2],
                 R[0, 2] - R[2, 0],
                 R[1, 0] - R[0, 1]
             ]) / (2 * np.sin(theta))
             
-            # 旋转矢量 = 旋转轴 * 旋转角度
+            # Rotation vector = rotation axis * rotation angle.
             return axis * theta
 
 
     def rotvec_to_rpy(self,rotvec: np.ndarray) -> tuple:
         """
-        将旋转矢量转换为RPY角度(绕X/Y/Z轴旋转)
+        Convert a rotation vector to RPY angles around X/Y/Z axes.
         
-        参数:
-            rotvec: 旋转矢量 [rx, ry, rz]
+        Args:
+            rotvec: Rotation vector [rx, ry, rz].
         
-        返回:
-            (roll, pitch, yaw): 绕X/Y/Z轴的旋转角度(弧度)
+        Returns:
+            (roll, pitch, yaw): Rotations around X/Y/Z axes in radians.
         """
         theta = np.linalg.norm(rotvec)
         
-        if np.abs(theta) < 1e-10:  # 零旋转
+        if np.abs(theta) < 1e-10:  # Zero rotation.
             return (0, 0, 0)
         
-        # 旋转轴
+        # Rotation axis.
         axis = rotvec / theta
         
-        # 构建旋转矩阵 (Rodrigues公式)
+        # Build rotation matrix with Rodrigues' formula.
         K = np.array([
             [0, -axis[2], axis[1]],
             [axis[2], 0, -axis[0]],
@@ -137,8 +137,8 @@ class  MATHTOOLS:
         
         R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
         
-        # 从旋转矩阵提取RPY (采用Z-Y-X顺序)
-        # 参考: https://en.wikipedia.org/wiki/Rotation_formalisms_in_three_dimensions
+        # Extract RPY from rotation matrix using Z-Y-X order.
+        # Reference: https://en.wikipedia.org/wiki/Rotation_formalisms_in_three_dimensions
         sy = np.sqrt(R[0, 0]**2 + R[1, 0]**2)
         
         singular = sy < 1e-6
@@ -155,7 +155,7 @@ class  MATHTOOLS:
         return (roll, pitch, yaw)
     
     def rotvec2mat(self,rotvec):
-        #旋转矢量到列惯例旋转矩阵
+        # Convert rotation vector to column-convention rotation matrix.
         theta = np.linalg.norm(rotvec)
         eps = 1e-6
         if theta < eps:
@@ -178,49 +178,49 @@ class  MATHTOOLS:
         return T
     def mat2xyz_rotvec(self,matrix, eps=1e-6):
         """
-        从 列惯例4×4 齐次矩阵中提取 xyz + 旋转矢量
+        Extract xyz + rotation vector from a column-convention 4x4 homogeneous matrix.
         
-        参数:
-            matrix: 4×4 齐次变换矩阵 (numpy数组)
-            eps: 奇点检测阈值
+        Args:
+            matrix: 4x4 homogeneous transform matrix as a numpy array.
+            eps: Singularity detection threshold.
         
-        返回:
+        Returns:
             [x, y, z, rx, ry, rz] 
-            其中 [rx, ry, rz] 是旋转矢量 = 旋转轴 × 旋转角(弧度)
+            where [rx, ry, rz] is rotation axis times rotation angle in radians.
         """
-        # 提取平移分量
+        # Extract translation.
         x, y, z = matrix[0, 3], matrix[1, 3], matrix[2, 3]
         
-        # 提取旋转矩阵
+        # Extract rotation matrix.
         R = matrix[:3, :3]
         
-        # 计算旋转角 θ
+        # Compute rotation angle theta.
         trace = np.trace(R)
-        cos_theta = max(min((trace - 1) / 2.0, 1.0), -1.0)  # 数值安全
+        cos_theta = max(min((trace - 1) / 2.0, 1.0), -1.0)  # Numerically safe.
         theta = math.acos(cos_theta)
         
-        # 计算旋转矢量
+        # Compute rotation vector.
         if theta < eps:
-            # 接近零旋转
+            # Near-zero rotation.
             rx, ry, rz = 0.0, 0.0, 0.0
             
         elif theta > math.pi - eps:
-            # θ ≈ π，sin(θ) ≈ 0，需要特殊处理
-            # 旋转轴是 (R + I) 的任意非零列
+            # theta is near pi and sin(theta) is near zero, so handle it specially.
+            # Rotation axis can be any nonzero column of (R + I).
             diag = np.diag(R)
-            idx = np.argmax(diag)  # 选择最稳定的列
+            idx = np.argmax(diag)  # Choose the most stable column.
             
             axis = np.array([R[0, idx], R[1, idx], R[2, idx]])
-            axis[idx] += 1  # (R + I) 的第idx列
+            axis[idx] += 1  # Column idx of (R + I).
             
-            # 归一化
+            # Normalize.
             axis_norm = np.linalg.norm(axis)
             axis = axis / axis_norm if axis_norm > eps else np.array([1.0, 0.0, 0.0])
             
             rx, ry, rz = axis * theta
             
         else:
-            # 正常情况：使用罗德里格斯公式
+            # Regular case: use Rodrigues' formula.
             sin_theta = math.sin(theta)
             factor = theta / (2 * sin_theta)
             
@@ -258,7 +258,7 @@ class  MATHTOOLS:
         return T_inv
   
     def normalize(self,x, axis=-1, eps=1e-8):
-        """沿指定轴做 L2 归一化"""
+        """Apply L2 normalization along the specified axis."""
         norm = np.linalg.norm(x, axis=axis, keepdims=True)
         return x / (norm + eps)
 
@@ -284,21 +284,21 @@ class  MATHTOOLS:
         out = mat[..., :2, :].copy().reshape(batch_dim + (6,))
         return out
     def mat2xyz_6drot(self, matrix: np.ndarray, eps=1e-6):
-        # 检查输入维度，处理批量操作
-        if len(matrix.shape) == 3:  # [T, 4, 4] 批量处理
+        # Check input dimensions and handle batched transforms.
+        if len(matrix.shape) == 3:  # Batched [T, 4, 4].
             batch_size = matrix.shape[0]
-            # 提取平移分量 [T, 3]
+            # Extract translation [T, 3].
             pos = matrix[:, :3, 3]
-            # 提取旋转矩阵 [T, 3, 3]
+            # Extract rotation matrix [T, 3, 3].
             R = matrix[:, :3, :3]
-            # 转换为6D旋转表示 [T, 6]
+            # Convert to 6D rotation representation [T, 6].
             rot_6d = self.mat_to_rot6d(R)
-            # 组合位置和旋转 [T, 9]
+            # Concatenate position and rotation [T, 9].
             result = np.concatenate([pos, rot_6d], axis=-1)
             return result
-        else:  # 单个 4x4 矩阵
+        else:  # Single 4x4 matrix.
             x, y, z = matrix[0, 3], matrix[1, 3], matrix[2, 3]
-            # 提取旋转矩阵
+            # Extract rotation matrix.
             R = matrix[:3, :3]
             rot_6d = self.mat_to_rot6d(R)
             return np.array([x, y, z, *rot_6d])

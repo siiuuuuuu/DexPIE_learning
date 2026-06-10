@@ -8,7 +8,7 @@ from termcolor import cprint
 from dexpie.model.value_fun.value_net import ValueNet
 import numpy as np
 from dexpie.model.common.module_attr_mixin import ModuleAttrMixin
-#实现loss计算，forward方法（求期望得到价值）
+# Implements loss computation and forward value expectation.
 
 class ValueCritic(ModuleAttrMixin):
     def __init__(self,
@@ -58,15 +58,15 @@ class ValueCritic(ModuleAttrMixin):
 
     @torch.no_grad()
     def forward(self, obs_dict: Dict, obs_preprocessed: bool = False) -> torch.Tensor:
-        #归一化处理
+        # Normalize/preprocess observations.
         nobs = obs_dict if obs_preprocessed else self._prepare_obs(obs_dict)
         B=nobs['image'].shape[0]
 
-        pred_logits=self.value_critic(nobs) #里面会把B,T合并起来
+        pred_logits=self.value_critic(nobs) # The model internally merges B and T.
         pred_prob = torch.softmax(pred_logits, dim=-1)
         pred_prob = torch.clamp(pred_prob, min=1e-8, max=1.0)
         value = torch.sum(pred_prob * self.bin_centers.unsqueeze(0).to(pred_prob.device), dim=-1)
-        return value.reshape(B,-1,1) #shape [B,T,1] 后续一般T为2
+        return value.reshape(B,-1,1) # Shape [B,T,1]; T is usually 2.
     
     def compute_loss(self, batch) -> torch.Tensor:
         nobs = self._prepare_obs(batch['obs'])
@@ -79,7 +79,7 @@ class ValueCritic(ModuleAttrMixin):
         pred_logits = self.value_critic(nobs)#shape [B, num_bins]
         pred_prob = torch.softmax(pred_logits, dim=-1).unsqueeze(1)
         pred_prob = torch.clamp(pred_prob, min=1e-8, max=1.0)
-        cross_entropy = -torch.sum(target * torch.log(pred_prob), dim=-1)#交叉熵
-        loss = cross_entropy.mean()#对B取平均
+        cross_entropy = -torch.sum(target * torch.log(pred_prob), dim=-1)# Cross entropy.
+        loss = cross_entropy.mean()# Average over B.
         return loss
         

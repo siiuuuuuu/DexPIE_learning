@@ -52,7 +52,7 @@ class RecapDatasetImage(BaseDataset):
         else:
             cprint("No 'intervention' in dataset, mark expert samples as intervention-positive.", 'yellow')
         if self.use_img:
-            buffer_keys.append('img') #对齐数据采集的img
+            buffer_keys.append('img') # Match the image key used during data collection.
         if self.use_wrist_img:
             buffer_keys.append('wrist_img')
         if self.use_depth:
@@ -98,9 +98,9 @@ class RecapDatasetImage(BaseDataset):
 
         if self.use_act_normal:
             data = {'action': self.replay_buffer['action']}
-            normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)#进行归一化
+            normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)# Fit normalizer.
         else:
-            normalizer['action'] = SingleFieldLinearNormalizer.create_identity()#恒等变换为了占位
+            normalizer['action'] = SingleFieldLinearNormalizer.create_identity()# Identity transform as a placeholder.
 
         if self.use_img:
             normalizer['image'] = SingleFieldLinearNormalizer.create_identity()
@@ -126,14 +126,14 @@ class RecapDatasetImage(BaseDataset):
                 intervention_num = 0
             intervent_positive = np.array(
                 intervention_num > (valid_steps / 3.0), dtype=np.bool_
-            )  # 只有干预步数大于有效步长度1/3时才为True（一般邻近自主步就是负样本），后续输出shape [B]
+            )  # True only when intervention steps exceed one third of valid steps; nearby autonomous steps are usually negatives.
         else:
-            intervent_positive = np.array(True, dtype=np.bool_)  # 当纯专家数据没有该字段时，默认标记为干预样本
+            intervent_positive = np.array(True, dtype=np.bool_)  # Mark pure expert data as intervention-positive when this field is missing.
         agent_pos = sample['state'][[0,-1],:6].astype(np.float32)
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
-        #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了
+        # Use the current pose as the action reference, which is simpler than using the previous action.
         if self.use_img:
-            image = sample['img'][[0,-1],].astype(np.float32) #取第一个和最后一个图像，用两个观测的价值来计算优势值
+            image = sample['img'][[0,-1],].astype(np.float32) # Use first and last images to compute advantage from two observations.
         if self.use_wrist_img:
             wrist_img = sample['wrist_img'][[0,-1],].astype(np.float32)
         if self.use_depth:
@@ -141,15 +141,15 @@ class RecapDatasetImage(BaseDataset):
         if self.use_relative_action:
             arm_action=sample['action'][:,:9]
             pose=self.tools.xyz_6drot_to_mat(arm_action)
-            if current_agent_pose.shape[-1]<6: #如果没有提供当前位姿，就用第一个动作位姿作为参考位姿
-                pose_0=pose[0]#每个序列开始时的当前动作位姿为参考位姿
+            if current_agent_pose.shape[-1]<6: # If current pose is missing, use the first action pose as reference.
+                pose_0=pose[0]# Current action pose at sequence start is the reference pose.
                 inv_pose_0=self.tools.se3_inverse(pose_0)
             else:
-                pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])#其是xyz+rotvec格式
+                pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])# xyz+rotvec format.
                 inv_pose_0=self.tools.se3_inverse(pose_0)
-            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)#相对于参考位姿的相对位姿
+            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)# Relative pose with respect to the reference pose.
             Relative_act=self.tools.mat2xyz_6drot(Relative_pose)
-            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)#相对位姿和绝对关节角
+            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)# Relative pose plus absolute joint angles.
             
 
         data = {
@@ -175,4 +175,4 @@ class RecapDatasetImage(BaseDataset):
         data = self._sample_to_data(sample)
         to_torch_function = lambda x: torch.from_numpy(x) if x.__class__.__name__ == 'ndarray' else x
         torch_data = dict_apply(data, to_torch_function)
-        return torch_data #返回torch tensor
+        return torch_data # Return torch tensor.

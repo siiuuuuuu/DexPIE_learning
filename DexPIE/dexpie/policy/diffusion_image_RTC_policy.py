@@ -111,7 +111,7 @@ class DiffusionImageRTCPolicy(BasePolicy):
 
     def forward(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         obs_dict = obs_dict.copy()
-        exc_action = obs_dict.pop("exc_action", None) #将被执行的动作作为条件，需要已经是作为当前观测下的相对动作，并匹配格式
+        exc_action = obs_dict.pop("exc_action", None) # Executed action condition; must be relative to the current observation and match the format.
         if exc_action is None:
             exc_horizon = 0
         else:
@@ -169,7 +169,7 @@ class DiffusionImageRTCPolicy(BasePolicy):
         cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
         if exc_horizon > 0:
             cond_data[:,:exc_horizon,...] = exc_action
-            cond_mask[:,:exc_horizon,...] = True #注入条件
+            cond_mask[:,:exc_horizon,...] = True # Inject condition.
 
         # run sampling
         nsample = self.conditional_sample(
@@ -379,7 +379,7 @@ class DiffusionImageRTCPolicy(BasePolicy):
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps, 
             (bsz,), device=trajectory.device
-        ).long() #因为后续使用的是全局条件所以没必要每个时间步都有一个timestep
+        ).long() # Global conditioning is used later, so each timestep does not need its own timestep value.
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_trajectory = self.noise_scheduler.add_noise(
@@ -392,14 +392,14 @@ class DiffusionImageRTCPolicy(BasePolicy):
         keep_cond = torch.rand(bsz, device=trajectory.device) >= self.cond_dropout_prob
         prefix_mask = torch.arange(horizon, device=trajectory.device).unsqueeze(0) < delay.unsqueeze(1)#[B,T]
         prefix_mask = prefix_mask & keep_cond.unsqueeze(1)
-        noisy_trajectory[prefix_mask] = cond_data[prefix_mask]#使用真实动作替换delay位置的加噪动作
+        noisy_trajectory[prefix_mask] = cond_data[prefix_mask]# Replace delayed noisy actions with real actions.
 
         # compute loss mask
-        loss_mask = ~condition_mask#作为条件的位置为0，让该位置的loss为0
+        loss_mask = ~condition_mask# Conditioned positions are zeroed so their loss is zero.
         if "mask"in batch:
-            padding_mask=batch['mask'].unsqueeze(-1).to(trajectory.device)#[B,T,1] 为1的位置为有效数据
+            padding_mask=batch['mask'].unsqueeze(-1).to(trajectory.device)#[B,T,1], where 1 marks valid data.
             loss_mask = loss_mask & padding_mask
-        loss_mask = loss_mask & ~prefix_mask.unsqueeze(-1)#前缀位置不计算loss
+        loss_mask = loss_mask & ~prefix_mask.unsqueeze(-1)# Prefix positions do not contribute to loss.
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
 

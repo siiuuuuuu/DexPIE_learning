@@ -23,7 +23,7 @@ value_critic_ckpt_path: /home/lrz/project/DexPIE/DexPIE/data/outputs/value_image
 advantage_quantiles_json_path: ${task.dataset.zarr_path}/advantage_quantiles.json
 advantage_quantile_low: 0.6
 advantage_quantile_high: 0.8
-advantage_beta_divisor: 5  # 可改为6.0，让top-40%更硬
+advantage_beta_divisor: 5  # Increase to 6.0 to make the top-40% split sharper.
 advantage_beta_min: 1.0e-6
 policy:
   _target_: dexpie.policy.DexPIE.DexPIEPolicy  #DexPIE.DexPIEPolicy
@@ -32,8 +32,8 @@ policy:
   diffusion_step_embed_dim: 128
   down_dims: [256, 512, 1024]
   max_latency_steps: 4
-  cond_dropout_prob: 0.9 # 前缀填充dropout概率
-  positive_cond_drop_prob: 0.3 #优势条件dropout概率
+  cond_dropout_prob: 0.9 # Prefix-fill dropout probability.
+  positive_cond_drop_prob: 0.3 # Advantage-condition dropout probability.
   positive_cfg_scale: 1.5
   horizon: ${horizon}
   kernel_size: 5
@@ -123,7 +123,7 @@ training:
   seed: 42
   debug: False
   resume: False
-  init_ckpt_path: null  # 可选：用于迭代训练的外部ckpt路径；null或空字符串表示不加载
+  init_ckpt_path: null  # Optional external ckpt path for iterative training; null or empty means no loading.
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 301

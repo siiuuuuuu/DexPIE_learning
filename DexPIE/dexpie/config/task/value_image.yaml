@@ -1,6 +1,6 @@
 name: box
 
-shape_meta: &shape_meta #可以在其它地方引用这整个层级参数，包括obs和action，而不只是一个参数
+shape_meta: &shape_meta # Reusable full shape metadata, including obs and target.
   # acceptable types: rgb, low_dim
   obs:
     image:

@@ -15,7 +15,7 @@ num_bins: 201
 v_min: -1
 v_max:  0
 max_length: 1000
-fail_rate: 0.9 #尽量让失败轨迹的价值比最慢的轨迹价值低
+fail_rate: 0.9 # Keep failed trajectories below the slowest successful trajectory value when possible.
 use_image: true
 policy:
   _target_: dexpie.policy.value_critic.ValueCritic
@@ -75,7 +75,7 @@ training:
   seed: 42
   debug: False
   resume: False
-  init_ckpt_path: null  # 可选：用于迭代训练的外部ckpt路径；null或空字符串表示不加载
+  init_ckpt_path: null  # Optional external ckpt path for iterative training; null or empty means no loading.
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 201

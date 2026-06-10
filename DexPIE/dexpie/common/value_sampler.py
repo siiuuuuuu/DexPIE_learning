@@ -5,7 +5,7 @@ from dexpie.common.replay_buffer import ReplayBuffer
 
 
 @numba.jit(nopython=True)
-# 创建索引，使用padding来确保序列长度一致
+# Create indices for selected episodes.
 def create_indices(
     episode_ends: np.ndarray,
     episode_mask: np.ndarray,
@@ -15,7 +15,7 @@ def create_indices(
     n_selected = np.sum(episode_mask)
     indices = np.zeros((n_selected, 4), dtype=np.int64)
     write_idx = 0
-    for i in range(len(episode_ends)):  # 遍历每个 episode
+    for i in range(len(episode_ends)):  # Iterate over each episode.
         if not episode_mask[i]:
             # skip episode
             continue
@@ -23,7 +23,7 @@ def create_indices(
         if i > 0:
             start_idx = episode_ends[i - 1]
         end_idx = episode_ends[i]
-        episode_length = end_idx - start_idx  # 计算当前 episode 的长度
+        episode_length = end_idx - start_idx  # Current episode length.
 
         indices[write_idx, 0] = i
         indices[write_idx, 1] = start_idx
@@ -74,9 +74,9 @@ class SequenceSampler:
         super().__init__()
 
         fail_reward = -max_length * fail_rate
-        episode_ends = replay_buffer.episode_ends[:]  # 获取 episode 结束的索引位置
+        episode_ends = replay_buffer.episode_ends[:]  # Episode end indices.
         if ('success' in replay_buffer.meta) and (replay_buffer.meta['success'] is not None):
-            # 长度和 episode_ends 相同，1 标志该 episode 成功，0 标志失败
+            # Same length as episode_ends; 1 means success and 0 means failure.
             success = replay_buffer.meta['success'][:].astype(np.bool_)
             if success.shape[0] != episode_ends.shape[0]:
                 raise ValueError(
@@ -98,10 +98,10 @@ class SequenceSampler:
 
         rewards_list = []
         for idx in range(len(indices)):
-            episode_idx, __, __, episode_length = indices[idx]  # 序列的索引
-            rewards = self.progess_reward(episode_length)  # 计算每个观察的累积回报
-            if not success[episode_idx]:  # 如果该 episode 失败
-                # 该片段的每步都得到一个失败惩罚
+            episode_idx, __, __, episode_length = indices[idx]  # Sequence index.
+            rewards = self.progess_reward(episode_length)  # Compute cumulative return for each observation.
+            if not success[episode_idx]:  # Failed episode.
+                # Apply failure penalty to every step in this segment.
                 rewards = rewards + fail_reward
             rewards_list.append(rewards)
 
@@ -110,7 +110,7 @@ class SequenceSampler:
         else:
             self.rewards = np.concatenate(rewards_list)
         self.length = len(self.rewards)
-        # 将所有观察的 return 拼接起来，方便后续值函数的二元组 观察-return 对应
+        # Concatenate all observation returns for later observation-return pairing.
 
         self.keys = list(obs_keys)
         self.replay_buffer = replay_buffer
@@ -120,7 +120,7 @@ class SequenceSampler:
 
     def progess_reward(self, episode_length):
 
-        # 计算每步的累积回报（从当前步到最后一步的奖励总和）
+        # Compute per-step cumulative return from the current step to the final step.
         returns = np.arange(1 - episode_length, 1, step=1, dtype=np.float32)  # np.array [length]
 
         return returns
@@ -129,7 +129,7 @@ class SequenceSampler:
         result = dict()
 
         for key in self.keys:
-            result[key] = self.replay_buffer[key][idx]  # 取出二元组：观测-奖励
+            result[key] = self.replay_buffer[key][idx]  # Fetch observation-reward pair.
         result['reward'] = np.array([self.rewards[idx]])
 
         return result

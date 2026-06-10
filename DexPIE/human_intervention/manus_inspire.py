@@ -6,24 +6,24 @@ import os
 import struct
 from dexpie.common.LIFO_Queue import LIFOQueue
 class ManusTele_intervention_Process(Process):
-    """MANUS手套到Inspire灵巧手的人类干预子进程控制器"""
+    """Human-intervention subprocess from MANUS glove to Inspire hand."""
     
     def __init__(self, queue=None, serial_port="/dev/ttyUSB0", baudrate=115200, 
                  manus_port=8888, control_threshold=10, scale_factor=15):
         """
-        初始化遥操作子进程控制器
+        Initialize the teleoperation subprocess controller.
         
         Args:
-            serial_port: 灵巧手串口 (默认: /dev/ttyUSB0)
-            baudrate: 串口波特率 (默认: 115200)
-            manus_port: MANUS数据端口 (默认: 8888)
-            control_threshold: 控制阈值 (默认: 10)
-            scale_factor: 数据缩放因子 (默认: 15)
+            serial_port: Inspire hand serial port (default: /dev/ttyUSB0).
+            baudrate: Serial baud rate (default: 115200).
+            manus_port: MANUS data port (default: 8888).
+            control_threshold: Control threshold (default: 10).
+            scale_factor: Data scale factor (default: 15).
         """
         super().__init__()
-        self.daemon = True  # 设为守护进程，主进程退出子进程自动退出
+        self.daemon = True  # Daemon process exits automatically with the parent process.
         self.stop_event = Event()
-        self.human_intervention = False # 是否有人类干预,即由手套数据控制inspire hand，而不是推理得到的动作
+        self.human_intervention = False # True when glove data controls the Inspire hand instead of policy actions.
         self.queue = queue
 
         self.serial_port = serial_port
@@ -32,16 +32,16 @@ class ManusTele_intervention_Process(Process):
         self.control_threshold = control_threshold
         self.scale_factor = scale_factor
         
-        # 初始化灵巧手
+        # Initialize Inspire hand state.
         self.right_hand = None
         self.left_hand_connect = False
         self.right_hand_connect = False
         
-        # 数据缓存
+        # Data cache.
         self.right_hand_data0 = None
         self.set_data = None
         
-        # 网络连接
+        # Network connection.
         self.server = None
         self.connection = None
         self.address = None
@@ -52,7 +52,7 @@ class ManusTele_intervention_Process(Process):
     
     
     def initialize_manus_connection(self):
-        """初始化MANUS网络连接"""
+        """Initialize MANUS network connection."""
         try:
             print("🔄 正在建立MANUS连接...")
             self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -70,11 +70,11 @@ class ManusTele_intervention_Process(Process):
             raise
     
     def receive_manus_data(self):
-        """接收MANUS手套数据"""
+        """Receive MANUS glove data."""
         try:
             data = []
             for i in range(9):
-                recv_bytes = self.connection.recv(8) #阻塞式 
+                recv_bytes = self.connection.recv(8) # Blocking receive.
                 if not recv_bytes:
                     return None
                 float_str = recv_bytes.decode('ascii')
@@ -86,25 +86,25 @@ class ManusTele_intervention_Process(Process):
             return None
     
     def process_hand_calibration(self, data):
-        """处理手部校准"""
+        """Handle hand calibration."""
         if not self.right_hand_connect and data[0] == 1002 and data[1] != 0:
             self.right_hand_connect = True
-            self.right_hand_data0 = np.array(data)  # 记录初始位置
-            self.set_data = self.right_hand_data0 - self.right_hand_data0  # 初始化SET为0
+            self.right_hand_data0 = np.array(data)  # Record the initial pose.
+            self.set_data = self.right_hand_data0 - self.right_hand_data0  # Initialize SET to zero.
             print("🎯 右手校准完成!")
             return True
         return False
     
     def calculate_finger_angles(self, data):
-        """计算手指角度"""
+        """Compute finger angles."""
         if not self.right_hand_connect or data[0] != 1002:
             return None
-        # 计算相对变化
+        # Compute relative change.
         diff = np.array(data) - self.set_data
         scaled_data = np.array(data) * self.scale_factor
-        self.set_data = np.array(scaled_data) - self.right_hand_data0  # 更新SET为当前相对位置
+        self.set_data = np.array(scaled_data) - self.right_hand_data0  # Update SET to the current relative pose.
         
-        # 检查控制阈值
+        # Check control threshold.
         if np.max(np.abs(diff)) < self.control_threshold:
             return None
         
@@ -121,13 +121,13 @@ class ManusTele_intervention_Process(Process):
         thumb_angle = int(min(1000, max(0, 1000 - 1.7 * angles[1])))#Stretch
 
         action=[pinky_angle,ring_angle,middle_angle,index_angle,thumb_angle_2,thumb_angle]
-        normalized_action = np.array([a / 1000.0 for a in action])  # 归一化到0-1范围
+        normalized_action = np.array([a / 1000.0 for a in action])  # Normalize to the 0-1 range.
         return action,normalized_action
 
 
     def run(self):
-        """子进程主循环"""
-        # 在子进程中初始化资源
+        """Subprocess main loop."""
+        # Initialize resources inside the subprocess.
         try:
             print("🔧 子进程准备遥操作系统...")
             self.initialize_manus_connection()
@@ -139,24 +139,24 @@ class ManusTele_intervention_Process(Process):
             while not self.stop_event.is_set():
                 hand_dict=dict()
                 time_start = time.time()
-                # 接收MANUS数据
-                data = self.receive_manus_data()#阻塞接收数据，其有缓冲区不拿快点会拿到旧数据，表现为延迟（先进先出）
+                # Receive MANUS data.
+                data = self.receive_manus_data()# Blocking receive; consume quickly to avoid buffered stale data and FIFO latency.
                 if data is None:
                     raise ConnectionError("MANUS数据接收中断")
                     
-                # 处理手部校准
+                # Handle hand calibration.
                 self.process_hand_calibration(data)
                 
-                # 计算手指角度
+                # Compute finger angles.
                 angles = self.calculate_finger_angles(data)
                 angles,normalized_action=self.angle_process(angles)
                 hand_dict["action"]=angles
                 hand_dict["normalized_action"]=normalized_action
                 if normalized_action is not None:
                     self.queue.put(hand_dict)
-                #通过回调获取最新的手部控制命令给手执行，应该延迟很小
+                # Publish the latest hand control command for low-latency execution.
                 end_time = time.time()
-                time.sleep(max(0, 1/60 - (end_time - time_start)))  # 60Hz读取频率，接收频率必须大于33hz不然缓冲区堆积会拿到旧数据
+                time.sleep(max(0, 1/60 - (end_time - time_start)))  # Read at 60 Hz; stay above 33 Hz to avoid stale buffered data.
 
         except ConnectionError as e:
             print(f"❌ 连接错误: {e}")
@@ -165,13 +165,13 @@ class ManusTele_intervention_Process(Process):
         finally:
             self.cleanup()
     def finalize(self):
-        self.stop_event.set()  # 设置主进程中断事件，通知主循环退出
+        self.stop_event.set()  # Signal the main loop to exit.
 
     def terminate(self) -> None:
         return super().terminate()
 
     def cleanup(self):
-        """清理资源"""
+        """Clean up resources."""
         print("🧹 子进程正在清理资源...")
         
         try:
@@ -199,7 +199,7 @@ class inspire_Manus(object):
         
         self.right_queue=LIFOQueue(maxsize=5)
         self.left_queue=LIFOQueue(maxsize=5)
-        #右手默认串口为/dev/ttyUSB0，左手为/dev/ttyUSB1
+        # Default serial ports: right hand on /dev/ttyUSB0, left hand on /dev/ttyUSB1.
         self.right_serial_port="/dev/ttyUSB0"
         self.left_serial_port="/dev/ttyUSB1"
 
@@ -257,9 +257,9 @@ class inspire_Manus(object):
 if __name__ == '__main__':
     inspire_Manus_1=inspire_Manus(use_right_hand=True, use_left_hand=False)
     
-    # 启动子进程
+    # Start subprocess.
     inspire_Manus_1.start()
-    time.sleep(1)#等待初始化完成
+    time.sleep(1)# Wait for initialization.
     for _ in range(500):
 
         start_time = time.time()

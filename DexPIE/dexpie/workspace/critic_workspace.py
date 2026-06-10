@@ -3,9 +3,9 @@ if __name__ == "__main__":
     import os
     import pathlib
 
-    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)#获取根目录
-    sys.path.append(ROOT_DIR)#根目录加入sys.path确保其他模块的导入
-    os.chdir(ROOT_DIR)#更改工作目录为该根目录，确保所有相对路径都是基于该根目录的
+    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)# Get repository root.
+    sys.path.append(ROOT_DIR)# Add root to sys.path so other modules can be imported.
+    os.chdir(ROOT_DIR)# Change working directory to root so relative paths resolve from there.
 
 import os
 import hydra

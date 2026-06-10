@@ -6,21 +6,21 @@ def create_on_press_handler(start_recording, human_intervention, complete_collec
                     k = key.char.lower()
                     if k == 's' and not start_recording.is_set():
                         start_recording.set()
-                        print("\n[INFO] 检测到按键 's'，开始录制遥操作...")
+                        print("\n[INFO] Key 's' pressed: start teleoperation recording.")
                     elif k == 's' and start_recording.is_set():
                         start_recording.clear()
-                        print("\n[INFO] 检测到按键 's'，结束录制遥操作...")
+                        print("\n[INFO] Key 's' pressed: stop teleoperation recording.")
                     elif k == 'e' and not human_intervention.is_set():
                         human_intervention.set()
                         with flag_lock:
-                            flag[0] = 0  # 修改列表中的值，每次进入人工干预时，将flag重置为0作为基准位姿
-                        print("\n[INFO] 检测到按键 'e'，开始人工干预...")
+                            flag[0] = 0  # Reset flag to 0 as the reference pose when entering human intervention.
+                        print("\n[INFO] Key 'e' pressed: start human intervention.")
                     elif k == 'e' and human_intervention.is_set():
                         human_intervention.clear()
-                        print("\n[INFO] 检测到按键 'e'，结束人工干预...")
+                        print("\n[INFO] Key 'e' pressed: stop human intervention.")
                     elif k == 'c':
                         complete_collect.set()
-                        print("\n[INFO] 检测到按键 'c'，准备结束录制...")
+                        print("\n[INFO] Key 'c' pressed: finish collection.")
             except AttributeError:
                 pass
             except Exception as e:

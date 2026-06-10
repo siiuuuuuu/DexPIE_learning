@@ -75,7 +75,7 @@ class DexPIEPolicy(BasePolicy):
             obs_shape_meta['image']['shape'][0] = 1
 
         obs_feature_dim = np.prod(obs_encoder.output_shape())
-        obs_feature_dim += diffusion_step_embed_dim  # 加上 positive_embedding 的维度
+        obs_feature_dim += diffusion_step_embed_dim  # Add positive_embedding dimension.
 
         model = ConditionalUnet1D(
             input_dim=action_dim,
@@ -117,7 +117,7 @@ class DexPIEPolicy(BasePolicy):
 
     def forward(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         obs_dict = obs_dict.copy()
-        exc_action = obs_dict.pop("exc_action", None)  # 推理时输入执行动作前缀
+        exc_action = obs_dict.pop("exc_action", None)  # Executed action prefix used during inference.
         if exc_action is None:
             exc_horizon = 0
         else:
@@ -168,18 +168,18 @@ class DexPIEPolicy(BasePolicy):
         base_global_cond = nobs_features.reshape(B, -1)
         positive_embedding = self.is_positive_embedding(
             torch.ones(B, device=base_global_cond.device, dtype=base_global_cond.dtype)
-        ).reshape(B, -1)  # 推理时固定为最好条件（score=1）
+        ).reshape(B, -1)  # Use the best condition during inference (score=1).
         global_cond = torch.cat([base_global_cond, positive_embedding], dim=-1)
         global_cond_uncond = torch.cat(
             [base_global_cond, torch.zeros_like(positive_embedding)], dim=-1
-        )  # 用0作为空条件，当作为无条件输入
+        )  # Use zeros as the empty condition for unconditional input.
 
         # empty data for action
         cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
         cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
         if exc_horizon > 0:
             cond_data[:, :exc_horizon, ...] = exc_action
-            cond_mask[:, :exc_horizon, ...] = True  # 注入前缀条件
+            cond_mask[:, :exc_horizon, ...] = True  # Inject prefix condition.
 
         # run sampling
         nsample = self.conditional_sample(
@@ -405,7 +405,7 @@ class DexPIEPolicy(BasePolicy):
         if self.training and self.positive_cond_drop_prob > 0:
             drop_mask = (torch.rand(batch_size, 1, device=positive_embedding.device)
                          < self.positive_cond_drop_prob)
-            positive_embedding = positive_embedding.masked_fill(drop_mask, 0.0)  # 用全0作为空条件
+            positive_embedding = positive_embedding.masked_fill(drop_mask, 0.0)  # Use all zeros as the empty condition.
 
         # handle different ways of passing observation
         local_cond = None
@@ -416,7 +416,7 @@ class DexPIEPolicy(BasePolicy):
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(
                 nobs,
-                lambda x: x[:, :self.n_obs_steps, ...]  # 只用第一个观测
+                lambda x: x[:, :self.n_obs_steps, ...]  # Use only the first observation.
             )
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
@@ -445,7 +445,7 @@ class DexPIEPolicy(BasePolicy):
         noisy_trajectory = self.noise_scheduler.add_noise(
             trajectory, noise, timesteps)
 
-        # RTC前缀训练：随机选择真实动作前缀并直接注入，且前缀位置不计算loss
+        # RTC prefix training: randomly choose and inject a real action prefix, excluding prefix positions from loss.
         delay = torch.randint(
             0, self.max_latency_steps + 1, (bsz,),
             device=trajectory.device, dtype=torch.int64
@@ -456,7 +456,7 @@ class DexPIEPolicy(BasePolicy):
         noisy_trajectory[prefix_mask] = cond_data[prefix_mask]
 
         # compute loss mask
-        loss_mask = ~condition_mask  # 作为条件的位置为0，让该位置loss为0
+        loss_mask = ~condition_mask  # Conditioned positions are zeroed so their loss is zero.
         if "mask" in batch:
             padding_mask = batch['mask'].unsqueeze(-1).to(trajectory.device)  # [B,T,1]
             loss_mask = loss_mask & padding_mask
@@ -482,5 +482,4 @@ class DexPIEPolicy(BasePolicy):
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
         return loss
-
 

@@ -287,7 +287,7 @@ class ConditionalUnet1D(nn.Module):
         if global_cond is not None:
             if self.condition_type == 'cross_attention':
                 timestep_embed = timestep_embed.unsqueeze(1).expand(-1, global_cond.shape[1], -1)
-            global_feature = torch.cat([timestep_embed, global_cond], axis=-1) #作为全局条件输入时间步了，不管那么细了
+            global_feature = torch.cat([timestep_embed, global_cond], axis=-1) # Use timestep as global condition; no per-step detail is needed here.
 
 
         # encode local features
@@ -344,4 +344,3 @@ class ConditionalUnet1D(nn.Module):
         x = einops.rearrange(x, 'b t h -> b h t')
 
         return x
-

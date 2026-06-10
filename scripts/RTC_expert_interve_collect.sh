@@ -1,5 +1,5 @@
 # Examples:
-#RTC策略的专家干预脚本
+# RTC policy expert-intervention collection script.
 
 # bash scripts/RTC_expert_interve_collect.sh RTC_dp_224x224_r3m dp-image 0310
 # bash scripts/RTC_expert_interve_collect.sh RTC_Recap Recap-image 0312

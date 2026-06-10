@@ -45,7 +45,7 @@ class DPDatasetImage(BaseDataset):
             'state', 
             'action',] 
         if self.use_img:
-            buffer_keys.append('img') #对齐数据采集的img
+            buffer_keys.append('img') # Match the image key used during data collection.
         if self.use_wrist_img:
             buffer_keys.append('wrist_img')
         if self.use_depth:
@@ -91,9 +91,9 @@ class DPDatasetImage(BaseDataset):
 
         if self.use_act_normal:
             data = {'action': self.replay_buffer['action']}
-            normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)#进行归一化
+            normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)# Fit normalizer.
         else:
-            normalizer['action'] = SingleFieldLinearNormalizer.create_identity()#恒等变换为了占位
+            normalizer['action'] = SingleFieldLinearNormalizer.create_identity()# Identity transform as a placeholder.
 
         if self.use_img:
             normalizer['image'] = SingleFieldLinearNormalizer.create_identity()
@@ -112,7 +112,7 @@ class DPDatasetImage(BaseDataset):
     def _sample_to_data(self, sample):
         agent_pos = sample['state'][:self.n_obs_steps,:6].astype(np.float32)
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
-        #当前的位姿，给动作作为基准，比前一个动作作为基准简单直观多了
+        # Use the current pose as the action reference, which is simpler than using the previous action.
         if self.use_img:
             image = sample['img'][:self.n_obs_steps,].astype(np.float32)
         if self.use_wrist_img:
@@ -122,15 +122,15 @@ class DPDatasetImage(BaseDataset):
         if self.use_relative_action:
             arm_action=sample['action'][:,:9]
             pose=self.tools.xyz_6drot_to_mat(arm_action)
-            if current_agent_pose.shape[-1]<6: #如果没有提供当前位姿，就用第一个动作位姿作为参考位姿
+            if current_agent_pose.shape[-1]<6: # If current pose is missing, use the first action pose as reference.
                 pose_0=pose[0]
                 inv_pose_0=self.tools.se3_inverse(pose_0)
             else:
-                pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])#其是xyz+rotvec格式
+                pose_0=self.tools.xyz_rotvec_to_mat(current_agent_pose[0])# xyz+rotvec format.
                 inv_pose_0=self.tools.se3_inverse(pose_0)
-            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)#相对于参考位姿的相对位姿
+            Relative_pose=np.einsum("ij,njk->nik",inv_pose_0, pose)# Relative pose with respect to the reference pose.
             Relative_act=self.tools.mat2xyz_6drot(Relative_pose)
-            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)#相对位姿和绝对关节角
+            action=np.concatenate([Relative_act,sample['action'][:,9:]],axis=-1)# Relative pose plus absolute joint angles.
             
 
         data = {
@@ -156,4 +156,4 @@ class DPDatasetImage(BaseDataset):
         data = self._sample_to_data(sample)
         to_torch_function = lambda x: torch.from_numpy(x) if x.__class__.__name__ == 'ndarray' else x
         torch_data = dict_apply(data, to_torch_function)
-        return torch_data #返回torch tensor
+        return torch_data # Return torch tensor.

@@ -3,9 +3,9 @@ if __name__ == "__main__":
     import os
     import pathlib
 
-    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)#获取根目录
-    sys.path.append(ROOT_DIR)#根目录加入sys.path确保其他模块的导入
-    os.chdir(ROOT_DIR)#更改工作目录为该根目录，确保所有相对路径都是基于该根目录的
+    ROOT_DIR = str(pathlib.Path(__file__).parent.parent.parent)# Get repository root.
+    sys.path.append(ROOT_DIR)# Add root to sys.path so other modules can be imported.
+    os.chdir(ROOT_DIR)# Change working directory to root so relative paths resolve from there.
 
 import os
 import json
@@ -37,7 +37,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 class RecapWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
-    exclude_keys = ('value_critic',) # 排除value_critic权重，因为它是在CriticWorkspace中训练的
+    exclude_keys = ('value_critic',) # Exclude value_critic weights because they are trained in CriticWorkspace.
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
@@ -206,7 +206,7 @@ class RecapWorkspace(BaseWorkspace):
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
-        self.model.set_normalizer(normalizer) # 训练时使用的normalizer，其也是nn.Module因此在deploy时也会加载参数并使用
+        self.model.set_normalizer(normalizer) # The training normalizer is an nn.Module, so deploy loads and uses it too.
         if cfg.training.use_ema:
             self.ema_model.set_normalizer(normalizer) 
 

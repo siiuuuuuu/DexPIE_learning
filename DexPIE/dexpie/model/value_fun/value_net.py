@@ -25,7 +25,7 @@ class TrainOnlyTransform(nn.Module):
         return x
 
 
-#给critic_head使用
+# Used by critic_head.
 class ResidualBlock(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
@@ -44,7 +44,7 @@ class ResidualBlock(nn.Module):
         out = out + residual
         return out
     
-#对图像能调整指定参数大小，无需在数据集预处理中调整
+# Resize images inside the model so dataset preprocessing does not need to.
 class ValueNet(ModuleAttrMixin):
     def __init__(self,
             shape_meta: dict,
@@ -75,7 +75,7 @@ class ValueNet(ModuleAttrMixin):
         
         if model_name == "r3m":
             model = load_r3m_model("resnet18", pretrained=pretrained) # resnet18, resnet34
-            model.eval()#非常重要不然根本无法work,batchnorm层很关键
+            model.eval()# Critical for BatchNorm behavior; the model otherwise fails to work correctly.
             cprint(f"Loaded R3M model using {model_name}. pretrained={pretrained}", 'green')
         else:
             raise NotImplementedError(f"Unsupported model_name: {model_name}")
@@ -87,7 +87,7 @@ class ValueNet(ModuleAttrMixin):
             for param in model.parameters():
                 param.requires_grad = False
         
-        feature_dim = 512 #r3m 输出维度
+        feature_dim = 512 # R3M output dimension.
         image_shape = None
         obs_shape_meta = shape_meta['obs'] 
         for key, attr in obs_shape_meta.items():
@@ -117,16 +117,16 @@ class ValueNet(ModuleAttrMixin):
             if type == 'rgb':
                 rgb_keys.append(key)
 
-                this_model = model if share_rgb_model else copy.deepcopy(model) #共享obsencoder，相当于多视角维放在batch维
+                this_model = model if share_rgb_model else copy.deepcopy(model) # Share obs encoder by treating multi-view inputs as batch items.
                 key_model_map[key] = this_model
 
                 this_transform = transform
                 key_transform_map[key] = this_transform
-                self.output_feat_dim += feature_dim # 每个rgb key的特征维度相cat
+                self.output_feat_dim += feature_dim # Concatenate feature dimensions from each rgb key.
             elif type == 'low_dim':
                 if not attr.get('ignore_by_policy', False):
                     low_dim_keys.append(key)
-                    self.output_feat_dim += shape[0] # 每个low_dim key的特征维度相cat
+                    self.output_feat_dim += shape[0] # Concatenate feature dimensions from each low_dim key.
             else:
                 raise RuntimeError(f"Unsupported obs type: {type}")
             
@@ -173,7 +173,7 @@ class ValueNet(ModuleAttrMixin):
             img = img.reshape(B*T, *img.shape[2:])
 
             if img.shape[2:] != self.key_shape_map[key]:
-                target_H, target_W = self.key_shape_map[key][1], self.key_shape_map[key][2]#自动将输入插值到模型要求的大小
+                target_H, target_W = self.key_shape_map[key][1], self.key_shape_map[key][2]# Interpolate input to the model-required size.
                 # do torchvision resize
                 # img shape: Bx3xHxW
                 # new size: Bx3xnHxnW
@@ -181,11 +181,11 @@ class ValueNet(ModuleAttrMixin):
             img = self.key_transform_map[key](img)
             img_list.append(img)
         if len(self.rgb_keys) > 0:
-            key = self.rgb_keys[0]#统一共享第一个key的模型
-            img = torch.cat(img_list, dim=0) #所有图像并行送入模型
+            key = self.rgb_keys[0]# Use the first key's model for shared encoding.
+            img = torch.cat(img_list, dim=0) # Run all images through the model in parallel.
             feature = self.key_model_map[key](img).to(self.device)
             assert len(feature.shape) == 2 and feature.shape[0] == bt * len(self.rgb_keys)
-            tuple_feature = torch.split(feature, bt, dim=0) #按key切分(主视角，腕部视角)，每块都是[B*T, feat]
+            tuple_feature = torch.split(feature, bt, dim=0) # Split by key; each block is [B*T, feat].
             features.extend(tuple_feature)
             #raw_feature = self.key_model_map[key](img).to(self.device)
             #feature = self.aggregate_feature(raw_feature)
@@ -193,7 +193,7 @@ class ValueNet(ModuleAttrMixin):
             #features.append(feature.reshape(B, -1))
             # print("feat:", feature.device)
 
-        # process lowdim input 如agent_pos
+        # Process lowdim input, e.g. agent_pos.
         for key in self.low_dim_keys:
             data = obs_dict[key]
             B, T = data.shape[:2]

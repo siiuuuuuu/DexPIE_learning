@@ -118,17 +118,17 @@ def sample_beta(batch_size, s=0.999, alpha=1.0, beta=1.5, device='cuda'):
 def sample_discrete_pow(batch_size, denoise_timesteps, device="cuda"):
    log2_sections = int(math.log2(denoise_timesteps)) + 1  # 8 for 128
    
-   # 反转并重复
+   # Reverse and repeat.
    dt_base = np.repeat(log2_sections - 1 - np.arange(log2_sections), 
                       batch_size // log2_sections)
    
-   # 填充0以匹配batch_size
+   # Pad with zeros to match batch_size.
    dt_base = np.concatenate([dt_base, np.zeros(batch_size - dt_base.shape[0])])
    
-   # 计算对应的sections
+   # Compute corresponding sections.
    dt_sections = 2 ** dt_base
    
-   # 对每个样本采样
+   # Sample each example.
    t = np.random.randint(0, dt_sections, size=batch_size).astype(np.float32)
    t = t / dt_sections
 

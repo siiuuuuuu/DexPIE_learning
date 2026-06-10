@@ -22,12 +22,12 @@ class UR_Comm:
             self.rtde_r = None
 
         self.workspace_limits = workspace_limits
-        self.servo_speed = servo_speed          # 机器人最大TCP速度 (m/s)
-        self.servo_acceleration = servo_acceleration   # 机器人最大TCP加速度 (m/s^2)
-        self.dt = dt               # 控制频率 (25Hz)
-        self.servo_dt=self.dt/2           # servoL内部控制频率 (即一次循环两次target_pose更新)
-        self.lookahead_time = lookahead_time      # 平滑时间 (0.03-0.2之间)
-        self.gain = gain                # 比例增益 (100-2000之间)
+        self.servo_speed = servo_speed          # Max robot TCP speed (m/s).
+        self.servo_acceleration = servo_acceleration   # Max robot TCP acceleration (m/s^2).
+        self.dt = dt               # Control frequency (25 Hz).
+        self.servo_dt=self.dt/2           # servoL internal control period; update target pose twice per loop.
+        self.lookahead_time = lookahead_time      # Smoothing time (0.03-0.2).
+        self.gain = gain                # Proportional gain (100-2000).
 
         #self.initial_pose =[0.248,0.1212,0.3978,1.16,1.25,1.28]
         self.initial_pose =[0.248,0.0812,0.3978,1.16,1.25,1.28]
@@ -55,12 +55,12 @@ class UR_Comm:
             safety_status = self.rtde_r.getSafetyStatus()
             robot_mode = self.rtde_r.getRobotMode()
             
-            # 检查是否在安全状态
+            # Check safety status.
             if safety_status not in [1, 2]:
                 print(f"Robot safety status error: {safety_status}")
                 return False
             
-            # 检查机器人模式
+            # Check robot mode.
             if robot_mode != 7:  # 7=running mode
                 print(f"Robot mode error, not in RUNNING mode: {robot_mode}")
                 return False
@@ -113,7 +113,7 @@ class UR_Comm:
             return None, None
         
     def set_arm_action(self, action):
-        """Set robot target pose,参考位姿为基座位姿"""
+        """Set robot target pose in the base frame."""
         try:
             self.rtde_c.servoL(action, self.servo_speed, self.servo_acceleration, self.servo_dt, self.lookahead_time, self.gain)
 
@@ -123,4 +123,4 @@ class UR_Comm:
 
     def reset_arm(self):
         """Reset robot to home position"""
-        self.rtde_c.moveL(self.initial_pose, 0.2, 0.2)#阻塞式，等待到达初始位姿
+        self.rtde_c.moveL(self.initial_pose, 0.2, 0.2)# Blocking call; waits until the initial pose is reached.

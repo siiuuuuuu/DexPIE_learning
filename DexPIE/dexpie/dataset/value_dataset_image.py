@@ -84,9 +84,9 @@ class ValueDatasetImage(BaseDataset):
     def _sample_to_data(self, sample):
         agent_pos = sample['state'].astype(np.float32)[None, :6]
         reward = sample['reward'].astype(np.float32)
-        #norm
-        norm_reward = torch.from_numpy(np.clip(reward/self.max_length, -1, 0)) #归一化到-1到0
-        target_dist = self.discretizer.discretize_to_gs_distribution(norm_reward, gaussian_std=1)#使用高斯概率 shape [1, num_bins]
+        # Normalize reward.
+        norm_reward = torch.from_numpy(np.clip(reward/self.max_length, -1, 0)) # Normalize to [-1, 0].
+        target_dist = self.discretizer.discretize_to_gs_distribution(norm_reward, gaussian_std=1)# Gaussian probability, shape [1, num_bins].
         if self.use_img:
             image = sample['img'][:].astype(np.float32)[None, :]
         if self.use_wrist_img:
@@ -96,8 +96,8 @@ class ValueDatasetImage(BaseDataset):
             'obs': {
                 'agent_pos': agent_pos,
                 },
-            'target': target_dist #用于交叉熵的目标分布
-                } #shape为(1, C) 这里需要增加一个时间维度
+            'target': target_dist # Target distribution for cross entropy.
+                } # Shape is (1, C); add a time dimension here.
         if self.use_img:
             data['obs']['image'] = image
         if self.use_wrist_img:
@@ -110,4 +110,4 @@ class ValueDatasetImage(BaseDataset):
         data = self._sample_to_data(sample)
         to_torch_function = lambda x: torch.from_numpy(x) if x.__class__.__name__ == 'ndarray' else x
         torch_data = dict_apply(data, to_torch_function)
-        return torch_data #返回torch tensor
+        return torch_data # Return torch tensor.

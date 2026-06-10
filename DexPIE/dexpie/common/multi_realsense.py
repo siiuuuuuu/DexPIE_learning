@@ -13,9 +13,9 @@ from dexpie.common.LIFO_Queue import LIFOQueue
 np.printoptions(3, suppress=True)
 
 def get_realsense_id():
-    ctx = rs.context()#RealSense API 的上下文对象
-    devices = ctx.query_devices()#查询当前连接并可见的 RealSense 设备，返回一个设备列表（rs.device_list 类型）
-    devices = [devices[i].get_info(rs.camera_info.serial_number) for i in range(len(devices))]#获取每个设备的序列号
+    ctx = rs.context()# RealSense API context object.
+    devices = ctx.query_devices()# Query currently connected and visible RealSense devices.
+    devices = [devices[i].get_info(rs.camera_info.serial_number) for i in range(len(devices))]# Get each device serial number.
     devices.sort() # Make sure the order is correct
     print("Found {} devices: {}".format(len(devices), devices))
     return devices
@@ -128,7 +128,7 @@ def init_given_realsense_D455(
     else:
         print("camera {} init.".format(device))
         return pipeline, None, None, None
-#初始化D435相机
+# Initialize D435 camera.
 def init_given_realsense_D435(
     device,
     enable_rgb=True,
@@ -167,9 +167,9 @@ def init_given_realsense_D435(
         
         # get depth scale
         depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
-        #获取深度传感器的深度尺度转化为米单位
+        # Get depth scale and convert depth units to meters.
         align = rs.align(rs.stream.color)
-        #对齐深度图到彩色图的帧
+        # Align depth frame to color frame.
         depth_profile = profile.get_stream(rs.stream.depth)
         intrinsics = depth_profile.as_video_stream_profile().get_intrinsics()
         camera_info = CameraInfo(intrinsics.width, intrinsics.height, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy)
@@ -179,7 +179,7 @@ def init_given_realsense_D435(
     else:
         print("camera {} init.".format(device))
         return pipeline, None, None, None
-#一样跟D435
+# Same structure as D435 initialization.
 def init_given_realsense_D415(
     device,
     enable_rgb=True,
@@ -187,8 +187,8 @@ def init_given_realsense_D415(
     sync_mode=0,
 ):
     """
-    针对 Intel RealSense D415 的初始化封装
-    参数含义与 D435 版本完全一致
+    Intel RealSense D415 initialization wrapper.
+    Parameters have the same meaning as the D435 version.
     """
     pipeline = rs.pipeline()
     config = rs.config()
@@ -196,23 +196,23 @@ def init_given_realsense_D415(
     print("Initializing D415 camera {}".format(device),flush=True)
 
     if enable_depth:
-        # D415 支持的 1280×720@30 Z16 与 D435 相同
+        # D415 supports 1280x720@30 Z16, same as D435.
         w, h = 1280, 720
         config.enable_stream(rs.stream.depth, w, h, rs.format.z16, 30)
 
     if enable_rgb:
-        # 保持与 D435 一致，用 1280×720@30 RGB8
-        # 如需 1920×1080 把 w,h 改成 1920,1080 即可
+        # Keep RGB settings consistent with D435.
+        # For 1920x1080, change w,h to 1920,1080.
         w, h = 640, 480
         config.enable_stream(rs.stream.color, w, h, rs.format.rgb8, 60)
 
-    # 解析并启动管线
+    # Resolve and start pipeline.
     config.resolve(pipeline)
     profile = pipeline.start(config)
 
     if enable_depth:
         depth_sensor = profile.get_device().first_depth_sensor()
-        depth_scale = depth_sensor.get_depth_scale()  # 单位：米
+        depth_scale = depth_sensor.get_depth_scale()  # Unit: meters.
         align = rs.align(rs.stream.color)
 
         depth_profile = profile.get_stream(rs.stream.depth)
@@ -250,7 +250,7 @@ class SingleVisionProcess(Process):
                 sync_mode=0,
                 img_size=384) -> None:
         super(SingleVisionProcess, self).__init__()
-        self.daemon = True#设为守护进程，主进程退出子进程自动退出
+        self.daemon = True# Daemon process exits automatically with the parent process.
         self.queue = queue
         self.device = device
 
@@ -264,10 +264,10 @@ class SingleVisionProcess(Process):
         self.height, self.width = img_size, img_size
    
     def get_vision(self):
-        frame = self.pipeline.wait_for_frames()#阻塞式api 等待获取组帧frameset便于后续对齐处理
+        frame = self.pipeline.wait_for_frames()# Blocking API; waits for a frameset for later alignment.
 
         if self.enable_depth:
-            aligned_frames = self.align.process(frame)#对齐深度图到彩色图的帧
+            aligned_frames = self.align.process(frame)# Align depth frame to color frame.
             # Get aligned frames
             color_frame = aligned_frames.get_color_frame()
             color_frame = np.asanyarray(color_frame.get_data())
@@ -329,8 +329,8 @@ class MultiRealSense(object):
 
         self.devices = get_realsense_id()
     
-        self.front_queue = LIFOQueue(maxsize=5)#先进后出循环队列，只会存储最新的5帧数据
-        self.right_queue = LIFOQueue(maxsize=5)#先进后出循环队列，只会存储最新的5帧数据
+        self.front_queue = LIFOQueue(maxsize=5)# LIFO circular queue that stores only the latest 5 frames.
+        self.right_queue = LIFOQueue(maxsize=5)# LIFO circular queue that stores only the latest 5 frames.
 
       
         # 0: f1380328, 1: f1422212
@@ -348,7 +348,7 @@ class MultiRealSense(object):
         self.use_right_cam = use_right_cam
     def start(self):
         if self.use_front_cam:
-            self.front_process.start()#开启前端相机子进程运行run函数
+            self.front_process.start()# Start the front camera subprocess and run loop.
             print("front camera start.",flush=True)
 
         if self.use_right_cam:
@@ -357,14 +357,14 @@ class MultiRealSense(object):
          
 
     
-    ##回调函数得到最新一帧数据  
+    ## Callback that returns the latest frame.
     def __call__(self):  
         cam_dict = {}
         if self.use_front_cam:  
-            front_color, front_depth = self.front_queue.get()#从循环队列中拿出最新一帧
+            front_color, front_depth = self.front_queue.get()# Get the latest frame from the circular queue.
             #front_color = self.front_queue.get()
-            #一般来说外部请求频率高于相机采集频率，队列只是为了防止阻塞等待，不是调用回调后才进行相机采样
-            #（因为一般不可能请求超过2帧时间，每次就是一帧得到后放在队列里然后get拿出来，就不用阻塞等相机了）
+            # External request frequency is usually higher than camera capture frequency.
+            # The queue avoids blocking for capture; callbacks consume the latest completed frame.
             cam_dict.update({'front_color': front_color, 'front_depth': front_depth})
  
         if self.use_right_cam: 
@@ -391,7 +391,7 @@ class MultiRealSense(object):
         
 
 if __name__ == "__main__":
-    cam = MultiRealSense(use_right_cam=False, img_size=512)#1024耗时可限制在15ms以内，512可限制在3ms以内
+    cam = MultiRealSense(use_right_cam=False, img_size=512)# 1024 stays within 15 ms; 512 stays within 3 ms.
     import matplotlib.pyplot as plt
     cam.start()
     time.sleep(1)
@@ -402,7 +402,7 @@ if __name__ == "__main__":
         print("deque_time:", time.time()-o_time)
         time_1=time.time()
         color_array.append(out['front_color'])
-        time.sleep(1/30-(time.time()-o_time))#帧率小于30hz不然有时拿不到最新一帧（在选择帧率中）
+        time.sleep(1/30-(time.time()-o_time))# Keep frame rate below 30 Hz to avoid missing the latest frame.
     cam.finalize()
     start_time=time.time()    
     imageio.mimsave('color_front.gif', color_array, duration=1/30)
