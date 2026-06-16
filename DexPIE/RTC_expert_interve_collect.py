@@ -8,23 +8,7 @@ import os
 import time
 import pathlib
 from datetime import datetime
-"""""
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parent
-REPO_ROOT = PROJECT_ROOT.parent
-VENDORED_R3M_ROOT = REPO_ROOT / "third_party" / "r3m"
-PYTHONPATH_ENTRIES = [PROJECT_ROOT]
-if VENDORED_R3M_ROOT.is_dir():
-    PYTHONPATH_ENTRIES.append(VENDORED_R3M_ROOT)
 
-for path in reversed(PYTHONPATH_ENTRIES):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
-os.environ["PYTHONPATH"] = os.pathsep.join(
-    [str(path) for path in PYTHONPATH_ENTRIES]
-    + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])
-)
-RAY_RUNTIME_ENV = {"env_vars": {"PYTHONPATH": os.environ["PYTHONPATH"]}}
-"""
 import hydra
 import ray
 import torch
@@ -41,6 +25,7 @@ from dexpie.common.rtc_action_stream import RTCActionStream
 from dexpie.common.intervention_keyboard_control import InterventionKeyboardControl
 from dexpie.common.collection_observation import ObservationBuilder
 from dexpie.common.control_command import ControlCommand
+from dexpie.common.joint_smoother import JointSmoother
 
 from communication.teleop_interfaces import InspireHandController, URArmInterface
 from human_intervention.expert_intervention import ExpertIntervention
@@ -58,13 +43,17 @@ DEFAULT_WORKSPACE_LIMITS = {
 DEFAULT_INITIAL_POSE = [0.248, 0.0812, 0.3978, 1.16, 1.25, 1.28]
 DEFAULT_HAND_PORT = "/dev/ttyUSB0"
 DEFAULT_HAND_BAUDRATE = 115200
+DEFAULT_HAND_RESET_COMMAND = [1000, 1000, 1000, 1000, 1000, 1000]
+DEFAULT_HAND_SMOOTHER_HZ = 100.0
+DEFAULT_HAND_SMOOTHER_W = 25.0  # Natural frequency; larger values track targets faster.
+DEFAULT_HAND_SMOOTHER_Z = 0.8  # Damping ratio; larger values reduce overshoot and smooth motion.
 DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task1_iter1"
 DEFAULT_CONTROL_DT = 1.0 / 25
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_MAX_TASK_LENGTH = 1000  # Max task length used to normalize reward calculation.
 
 
-@ray.remote(num_gpus=1, )
+@ray.remote(num_gpus=1)
 class async_policy:
     def __init__(self, policy: torch.nn.Module):
         self.policy = policy.to('cuda')
@@ -92,17 +81,14 @@ class async_policy:
 def main(cfg: OmegaConf):
     torch.manual_seed(42)
     OmegaConf.resolve(cfg)
-
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
-
     workspace_name = workspace.__class__.__name__
     cfg_scale = OmegaConf.select(cfg, "policy.positive_cfg_scale")
     if workspace_name in ("DexPIEWorkspace", "RecapWorkspace") and cfg_scale is not None:
         cprint(f"Current workspace={workspace_name}, cfg scale={cfg_scale}", "yellow")
     use_image = True
     use_wrist_img = bool(cfg.task.dataset.use_wrist_img)
-
     tools = MATHTOOLS()
 
     # Initialize expert process.
@@ -159,6 +145,13 @@ def main(cfg: OmegaConf):
     )
     print("robot connected")
     hand_controller = InspireHandController(DEFAULT_HAND_PORT, DEFAULT_HAND_BAUDRATE)
+    hand_smoother = JointSmoother(
+        send_callback=hand_controller.apply,
+        hz=DEFAULT_HAND_SMOOTHER_HZ,
+        w=DEFAULT_HAND_SMOOTHER_W,
+        z=DEFAULT_HAND_SMOOTHER_Z,
+        dim=len(DEFAULT_HAND_RESET_COMMAND),
+    )
     print("hand_controller connected")
     obs_builder = ObservationBuilder(
         camera,
@@ -170,8 +163,10 @@ def main(cfg: OmegaConf):
     if first_init:
         robot.move_l(DEFAULT_INITIAL_POSE, 0.2, 0.2)
         hand_controller.reset()
+        hand_smoother.reset_state(DEFAULT_HAND_RESET_COMMAND)
         camera.start()
         time.sleep(0.5)
+        hand_smoother.start()
         print("Robot reset!")
 
     max_task_length = DEFAULT_MAX_TASK_LENGTH
@@ -243,7 +238,7 @@ def main(cfg: OmegaConf):
                     command.intervention,
                 )
                 robot.servo(command.target_pose)
-                hand_controller.apply(command.hand_command)
+                hand_smoother.update(command.hand_command)
                 step_count += 1
 
                 loop_end_time = time.time()
@@ -251,6 +246,7 @@ def main(cfg: OmegaConf):
 
             # Stop servo before ending the recording.
             robot.stop_servo()
+            hand_smoother.stop()
             time.sleep(0.3)
 
             # Save data in RTC_deploy format and keep intervention labels.
@@ -281,6 +277,8 @@ def main(cfg: OmegaConf):
 
             # reset robot
             hand_controller.reset()
+            hand_smoother.reset_state(DEFAULT_HAND_RESET_COMMAND)
+            hand_smoother.start()
             robot.move_l(DEFAULT_INITIAL_POSE, 0.2, 0.2)
             time.sleep(0.1)
 
@@ -292,6 +290,7 @@ def main(cfg: OmegaConf):
 
     robot.close(stop_script=True)
     camera.finalize()
+    hand_smoother.stop()
     hand_controller.close()
 
     if ray.is_initialized():

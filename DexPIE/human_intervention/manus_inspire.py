@@ -22,7 +22,7 @@ class ManusTele_intervention_Process(Process):
         """
         super().__init__()
         self.daemon = True  # Daemon process exits automatically with the parent process.
-        self.stop_event = Event()
+        self.stop_event = Event()#cwr is cs
         self.human_intervention = False # True when glove data controls the Inspire hand instead of policy actions.
         self.queue = queue
 

@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 use_image: true
-value_critic_ckpt_path: /home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0311_seed0/checkpoints/latest.ckpt
+value_critic_ckpt_path: /home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0507_task1_iter1_seed0/checkpoints/latest.ckpt
 advantage_quantiles_json_path: ${task.dataset.zarr_path}/advantage_quantiles.json
 advantage_quantile_low: 0.6
 advantage_quantile_high: 0.8
@@ -105,7 +105,7 @@ dataloader:
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 64
+  batch_size: 32
   num_workers: 8
   shuffle: False
   pin_memory: True

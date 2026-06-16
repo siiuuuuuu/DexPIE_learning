@@ -4,8 +4,8 @@
 #   bash scripts/compute_advantage_quantiles.sh /path/to/latest.ckpt /path/to/dataset.zarr
 #   bash scripts/compute_advantage_quantiles.sh /path/to/latest.ckpt /path/to/dataset.zarr DexPIE Recap-image 0 "[30,40,10,50,20]" advantage_quantiles.json
 
-critic_ckpt=${1:-/home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0410_task2_iter1_seed0/checkpoints/latest.ckpt}
-dataset_path=${2:-/home/lrz/dp_data/task2_Recap_iter1}
+critic_ckpt=${1:-/home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0507_task1_iter1_seed0/checkpoints/latest.ckpt}
+dataset_path=${2:-/home/lrz/dp_data/task1_Recap_iter1}
 config_name=${3:-DexPIE}
 task_name=${4:-Recap-image}
 gpu_id=${5:-0}
