@@ -36,3 +36,5 @@ dataset:
   use_wrist_img: true
   use_depth: false
   use_relative_action: true
+  use_precomputed_advantage: true
+  advantage_key: advantage

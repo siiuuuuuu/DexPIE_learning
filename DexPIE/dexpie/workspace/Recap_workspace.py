@@ -23,9 +23,7 @@ import numpy as np
 from termcolor import cprint
 import shutil
 from dexpie.workspace.base_workspace import BaseWorkspace
-from dexpie.workspace.critic_workspace import CriticWorkspace
 from dexpie.policy.RTC_Recap import RTCRecapPolicy
-from dexpie.policy.value_critic import ValueCritic
 from dexpie.dataset.base_dataset import BaseImageDataset
 from dexpie.common.checkpoint_util import TopKCheckpointManager
 from dexpie.common.json_logger import JsonLogger
@@ -37,7 +35,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 class RecapWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
-    exclude_keys = ('value_critic',) # Exclude value_critic weights because they are trained in CriticWorkspace.
+    exclude_keys = ('value_critic',) # Ignore legacy checkpoints that may contain a cached critic.
 
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
@@ -62,32 +60,9 @@ class RecapWorkspace(BaseWorkspace):
         self.global_step = 0
         self.epoch = 0
         self.ratio = cfg.training.ratio
-        self.value_critic: ValueCritic = None
         self.adv_q_low = None
         self.adv_q_high = None
         self.advantage_quantiles_path = None
-
-    def _load_frozen_value_critic(self, cfg: OmegaConf, device: torch.device):
-        ckpt_path = cfg.get('value_critic_ckpt_path', None)
-        if ckpt_path is None:
-            raise ValueError("Missing `value_critic_ckpt_path` in config. "
-                             "Please provide critic checkpoint path for Recap training.")
-        ckpt_path = pathlib.Path(ckpt_path).expanduser()
-        if not ckpt_path.is_file():
-            raise ValueError(f"Value critic checkpoint file not found: {ckpt_path}")
-
-        critic_workspace: CriticWorkspace = CriticWorkspace.create_from_checkpoint(str(ckpt_path))
-        use_ema = bool(critic_workspace.cfg.training.use_ema)
-        value_critic = critic_workspace.ema_model if (use_ema and critic_workspace.ema_model is not None) else critic_workspace.model
-        value_critic.to(device)
-        value_critic.eval()
-        for p in value_critic.parameters():
-            p.requires_grad = False
-
-        self.value_critic = value_critic
-        critic_cfg = critic_workspace.cfg
-        self.max_length = critic_cfg.get('max_length', critic_cfg.task.dataset.max_length)
-        cprint(f"[ValueCritic] loaded and frozen from: {ckpt_path}", "cyan")
 
     def _extract_quantile_threshold(self, stats_payload, target_q: float):
         quantile_list = stats_payload.get("advantage_quantiles", [])
@@ -165,7 +140,7 @@ class RecapWorkspace(BaseWorkspace):
         return is_positive, quantile_thr
 
     def _prepare_obs_once(self, obs_dict):
-        # Prepare image/wrist image once per batch for both value critic and recap loss.
+        # Prepare image/wrist image once per batch for the Recap loss.
         nobs = obs_dict.copy()
         image = nobs['image'] / 255.0
         if image.shape[-1] == 3:
@@ -184,6 +159,15 @@ class RecapWorkspace(BaseWorkspace):
                     wrist_img = wrist_img.permute(0, 3, 1, 2)
             nobs["wrist_img"] = wrist_img
         return nobs
+
+    def _get_batch_advantage(self, batch, obs_for_loss=None):
+        if "advantage" in batch:
+            return batch["advantage"].float().reshape(-1)
+
+        raise RuntimeError(
+            "Missing batch['advantage']. Run scripts/compute_advantage_quantiles.sh "
+            "to write data/advantage into the zarr dataset before training."
+        )
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
@@ -260,7 +244,12 @@ class RecapWorkspace(BaseWorkspace):
         if self.ema_model is not None:
             self.ema_model.to(device)
         optimizer_to(self.optimizer, device)
-        self._load_frozen_value_critic(cfg, device)
+        if not bool(getattr(dataset, "has_advantage", False)):
+            raise ValueError(
+                "Recap training now requires precomputed zarr advantage labels. "
+                "Run scripts/compute_advantage_quantiles.sh for this dataset first."
+            )
+        cprint("[Advantage] using precomputed zarr labels from dataset.", "cyan")
         self._load_advantage_quantiles(cfg)
 
         # save batch for sampling
@@ -298,13 +287,7 @@ class RecapWorkspace(BaseWorkspace):
                     batch_for_loss = batch.copy()
                     batch_for_loss['obs'] = obs_for_loss
                     
-                    batch_value = self.value_critic(obs_for_loss, obs_preprocessed=True)  # [B,T,1]
-                    valid_steps = batch["mask"].float().sum(dim=-1).clamp(min=1.0, max=float(batch_value.shape[1]))  # [B]
-                    valid_offset = valid_steps - 1.0
-                    mid_return = -(valid_offset / self.max_length)  # [B]
-                    v_last = batch_value[:, -1, 0]   # [B]
-                    v_first = batch_value[:, 0, 0]   # [B]
-                    advantage = mid_return + v_last - v_first  # [B], V_{t+valid}-V_t
+                    advantage = self._get_batch_advantage(batch, obs_for_loss)
                     is_positive, quantile_thr = self.get_positive_mask(advantage)
                     adv_det = advantage.detach()
                     adv_mean = adv_det.mean().item()
@@ -379,13 +362,7 @@ class RecapWorkspace(BaseWorkspace):
                             obs_for_loss = self._prepare_obs_once(batch['obs'])
                             batch_for_loss = batch.copy()
                             batch_for_loss['obs'] = obs_for_loss
-                            batch_value = self.value_critic(obs_for_loss, obs_preprocessed=True)  # [B,T,1]
-                            valid_steps = batch["mask"].float().sum(dim=-1).clamp(min=1.0, max=float(batch_value.shape[1]))  # [B]
-                            valid_offset = valid_steps - 1.0
-                            mid_return = -(valid_offset / self.max_length)  # [B]
-                            v_last = batch_value[:, -1, 0]   # [B]
-                            v_first = batch_value[:, 0, 0]   # [B]
-                            advantage = mid_return + v_last - v_first  # [B], V_{t+valid}-V_t
+                            advantage = self._get_batch_advantage(batch, obs_for_loss)
                             is_positive, _ = self.get_positive_mask(advantage)
                             loss = self.model.compute_loss(batch_for_loss, is_positive=is_positive, obs_preprocessed=True)
                             val_losses.append(loss)

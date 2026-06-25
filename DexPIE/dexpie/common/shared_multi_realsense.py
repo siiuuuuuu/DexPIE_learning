@@ -43,6 +43,7 @@ def init_given_realsense_D415(
     enable_depth=False,
     enable_point_cloud=False,
     sync_mode=0,
+    color_fps=30,
 ):
     pipeline = rs.pipeline()
     config = rs.config()
@@ -55,7 +56,7 @@ def init_given_realsense_D415(
 
     if enable_rgb:
         w, h = 640, 480
-        config.enable_stream(rs.stream.color, w, h, rs.format.rgb8, 60)
+        config.enable_stream(rs.stream.color, w, h, rs.format.rgb8, int(color_fps))
 
     config.resolve(pipeline)
     profile = pipeline.start(config)
@@ -241,6 +242,37 @@ class SharedFrameRingAccessor:
             }
             return sample
 
+    def nearest_by_host_time(self, target_host_ns, copy_frame=False):
+        target_host_ns = int(target_host_ns)
+        with self.lock:
+            best_idx = -1
+            best_delta_ns = None
+            for idx in range(self.slots):
+                if self.slot_valid[idx] == 0:
+                    continue
+                delta_ns = int(self.slot_host_ns[idx]) - target_host_ns
+                abs_delta_ns = abs(delta_ns)
+                if best_delta_ns is None or abs_delta_ns < best_delta_ns:
+                    best_idx = idx
+                    best_delta_ns = abs_delta_ns
+
+            if best_idx < 0:
+                return None
+
+            delta_ns = int(self.slot_host_ns[best_idx]) - target_host_ns
+            sample = {
+                "seq": int(self.slot_seq[best_idx]),
+                "t_host_ns": int(self.slot_host_ns[best_idx]),
+                "t_dev_ts": float(self.slot_dev_ts[best_idx]),
+                "frame_no": int(self.slot_frame_no[best_idx]),
+                "slot_idx": best_idx,
+                "sync_delta_to_target_ms": delta_ns / 1e6,
+                "frame": self.arr[best_idx].copy()
+                if copy_frame
+                else self.arr[best_idx],
+            }
+            return sample
+
     def close(self):
         try:
             self.shm.close()
@@ -263,6 +295,7 @@ class SingleVisionProcess(mp.Process):
         use_grid_sampling=True,
         use_crop=False,
         img_size=384,
+        color_fps=30,
     ):
         super().__init__()
         self.daemon = True
@@ -280,6 +313,7 @@ class SingleVisionProcess(mp.Process):
 
         self.resize = True
         self.height, self.width = img_size, img_size
+        self.color_fps = int(color_fps)
 
         self.z_far = z_far
         self.z_near = z_near
@@ -349,6 +383,7 @@ class SingleVisionProcess(mp.Process):
             enable_depth=self.enable_depth,
             enable_point_cloud=self.enable_pointcloud,
             sync_mode=self.sync_mode,
+            color_fps=self.color_fps,
         )
 
         try:
@@ -423,11 +458,19 @@ class MultiRealSense:
         use_crop=False,
         img_size=256,
         ring_slots=8,
+        front_camera_fps=30,
+        wrist_camera_fps=60,
+        sync_right_to_front=True,
+        sync_wait_timeout_ms=5.0,
     ):
         self.devices = get_realsense_id()
 
         self.use_front_cam = use_front_cam
         self.use_right_cam = use_right_cam
+        self.front_camera_fps = int(front_camera_fps)
+        self.wrist_camera_fps = int(wrist_camera_fps)
+        self.sync_right_to_front = bool(sync_right_to_front)
+        self.sync_wait_timeout_ms = float(sync_wait_timeout_ms)
 
         # Shared rings: only RGB is shared (matching current project usage).
         color_shape = (img_size, img_size, 3)
@@ -448,6 +491,7 @@ class MultiRealSense:
                 use_grid_sampling=use_grid_sampling,
                 use_crop=use_crop,
                 img_size=img_size,
+                color_fps=self.front_camera_fps,
             )
             self.front_reader = SharedFrameRingAccessor(self.front_ring.descriptor())
 
@@ -465,6 +509,7 @@ class MultiRealSense:
                 use_grid_sampling=use_grid_sampling,
                 use_crop=use_crop,
                 img_size=img_size,
+                color_fps=self.wrist_camera_fps,
             )
             self.right_reader = SharedFrameRingAccessor(self.right_ring.descriptor())
 
@@ -485,8 +530,33 @@ class MultiRealSense:
             sample = reader.latest(copy_frame=True)
         return sample
 
+    @staticmethod
+    def _wait_nearest_by_host_time(
+        reader,
+        target_host_ns,
+        timeout_ms=0.0,
+        sleep_s=0.001,
+    ):
+        deadline = time.monotonic() + max(0.0, timeout_ms) / 1000.0
+        best = None
+        while True:
+            sample = reader.nearest_by_host_time(
+                target_host_ns,
+                copy_frame=True,
+            )
+            if sample is not None:
+                best = sample
+                if sample["t_host_ns"] >= target_host_ns:
+                    return sample
+
+            if time.monotonic() >= deadline:
+                return best
+
+            time.sleep(sleep_s)
+
     def __call__(self):
         cam_dict = {}
+        front = None
 
         if self.use_front_cam:
             front = self._wait_latest(self.front_reader)
@@ -505,7 +575,16 @@ class MultiRealSense:
             )
 
         if self.use_right_cam:
-            right = self._wait_latest(self.right_reader)
+            if self.sync_right_to_front and front is not None:
+                right = self._wait_nearest_by_host_time(
+                    self.right_reader,
+                    front["t_host_ns"],
+                    timeout_ms=self.sync_wait_timeout_ms,
+                )
+                if right is None:
+                    right = self._wait_latest(self.right_reader)
+            else:
+                right = self._wait_latest(self.right_reader)
             cam_dict.update(
                 {
                     "right_color": right["frame"],
@@ -516,6 +595,9 @@ class MultiRealSense:
                         "t_host_ns": right["t_host_ns"],
                         "t_dev_ts": right["t_dev_ts"],
                         "frame_no": right["frame_no"],
+                        "sync_delta_to_front_ms": right.get(
+                            "sync_delta_to_target_ms"
+                        ),
                     },
                 }
             )

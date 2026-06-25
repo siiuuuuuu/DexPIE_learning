@@ -9,7 +9,6 @@ import time
 import pathlib
 from datetime import datetime
 
-import numpy as np
 import hydra
 import ray
 import torch
@@ -19,21 +18,20 @@ from termcolor import cprint
 from dexpie.workspace.base_workspace import BaseWorkspace
 from dexpie.common.shared_multi_realsense import MultiRealSense
 from dexpie.common.tools import MATHTOOLS
-from dexpie.common.hand_action_util import hand_action_util
 from dexpie.common.intervention_episode_buffer import InterventionEpisodeBuffer
 from dexpie.common.rtc_action_stream import RTCActionStream
 from dexpie.common.intervention_keyboard_control import InterventionKeyboardControl
 from dexpie.common.collection_observation import ObservationBuilder
-from dexpie.common.hand_executor import (
-    HAND_MODE_INTERVENTION,
-    HighRateHandExecutor,
+from dexpie.common.rtc_collection import (
+    AlignedActionProvider,
+    InterventionModeManager,
+    PolicyActionPlanner,
+    RTCTimestampBuilder,
 )
+from dexpie.common.hand_executor import HighRateHandExecutor
 from dexpie.common.robot_state_reader import HighRateRobotStateReader
 from dexpie.common.human_hand_updater import HumanHandUpdater
-from dexpie.common.arm_executor import (
-    ARM_MODE_INTERVENTION,
-    HighRateArmExecutor,
-)
+from dexpie.common.arm_executor import HighRateArmExecutor
 
 from communication.teleop_interfaces import InspireHandController, URArmInterface
 from human_intervention.expert_intervention import ExpertIntervention
@@ -65,101 +63,9 @@ DEFAULT_TRACKER_FREQUENCY = 60.0
 DEFAULT_MANUS_TIMEOUT = 0.25
 DEFAULT_HUMAN_HAND_UPDATE_FREQUENCY = 120.0
 DEFAULT_ALIGNMENT_TOLERANCE_MS = 25.0
-
-
-def time_delta_ms(t_ns, ref_ns):
-    if t_ns is None or ref_ns is None:
-        return None
-    return (int(t_ns) - int(ref_ns)) / 1e6
-
-
-def scalar_value(value):
-    if value is None:
-        return None
-    if hasattr(value, "item"):
-        return value.item()
-    return value
-
-
-def add_arm_motion_timestamps(timestamps, arm_motion):
-    if arm_motion is None:
-        return
-
-    int_keys = (
-        "t_arm_action_host_ns",
-        "t_arm_servo_host_ns",
-        "t_arm_target_host_ns",
-        "t_policy_command_host_ns",
-        "t_policy0_host_ns",
-        "t_policy1_host_ns",
-        "t_tracker_host_ns",
-        "t_tracker0_host_ns",
-        "t_tracker1_host_ns",
-        "t_tracker_latest_host_ns",
-        "arm_executor_mode",
-    )
-    for key in int_keys:
-        if key in arm_motion:
-            timestamps[key] = scalar_value(arm_motion[key])
-
-    if "interpolation_alpha" in arm_motion:
-        timestamps["interpolation_alpha"] = scalar_value(
-            arm_motion["interpolation_alpha"]
-        )
-
-    action_ns = timestamps.get("t_arm_action_host_ns")
-    timestamps["t_aligned_arm_action_ns"] = action_ns
-    timestamps["sync_delta_arm_action_ms"] = time_delta_ms(
-        action_ns,
-        timestamps.get("t_anchor_ns"),
-    )
-
-
-def add_hand_sample_timestamps(timestamps, hand_sample):
-    if hand_sample is None:
-        return
-
-    int_keys = (
-        "t_hand_action_host_ns",
-        "t_hand_command_host_ns",
-        "t_hand_target_host_ns",
-        "t_manus_sample_host_ns",
-        "manus_seq",
-        "hand_executor_mode",
-    )
-    for key in int_keys:
-        if key in hand_sample:
-            timestamps[key] = scalar_value(hand_sample[key])
-
-    action_ns = timestamps.get("t_hand_action_host_ns")
-    timestamps["t_aligned_hand_action_ns"] = action_ns
-    timestamps["sync_delta_hand_action_ms"] = time_delta_ms(
-        action_ns,
-        timestamps.get("t_anchor_ns"),
-    )
-
-
-def aligned_action_from_samples(arm_motion, hand_sample):
-    arm_action = np.asarray(arm_motion["arm_action"], dtype=np.float32)
-    hand_action = np.asarray(hand_sample["command"], dtype=np.float32) / 1000.0
-    return np.concatenate((arm_action, hand_action)).astype(np.float32)
-
-
-def aligned_intervention_from_samples(arm_motion, hand_sample):
-    arm_mode = scalar_value(arm_motion.get("arm_executor_mode"))
-    hand_mode = scalar_value(hand_sample.get("hand_executor_mode"))
-    return int(
-        arm_mode == ARM_MODE_INTERVENTION
-        or hand_mode == HAND_MODE_INTERVENTION
-    )
-
-
-def within_alignment_tolerance(timestamps, tolerance_ms):
-    for key in ("sync_delta_arm_action_ms", "sync_delta_hand_action_ms"):
-        value = timestamps.get(key)
-        if value is None or abs(float(value)) > tolerance_ms:
-            return False
-    return True
+DEFAULT_FRONT_CAMERA_FPS = 30
+DEFAULT_WRIST_CAMERA_FPS = 60
+DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
 
 
 @ray.remote(num_gpus=1)
@@ -240,6 +146,10 @@ def main(cfg: OmegaConf):
         use_front_cam=True,
         use_right_cam=use_wrist_img,
         img_size=img_size,
+        front_camera_fps=DEFAULT_FRONT_CAMERA_FPS,
+        wrist_camera_fps=DEFAULT_WRIST_CAMERA_FPS,
+        sync_right_to_front=True,
+        sync_wait_timeout_ms=DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS,
     )
     robot = URArmInterface(
         DEFAULT_UR_HOST,
@@ -290,6 +200,25 @@ def main(cfg: OmegaConf):
         robot_state_reader=robot_state_reader,
         alignment_tolerance_ms=DEFAULT_ALIGNMENT_TOLERANCE_MS,
     )
+    timestamp_builder = RTCTimestampBuilder()
+    intervention_manager = InterventionModeManager(
+        rtc_stream,
+        arm_executor,
+        hand_executor,
+    )
+    policy_planner = PolicyActionPlanner(
+        rtc_stream,
+        arm_executor,
+        hand_executor,
+        dt=dt,
+        timestamp_builder=timestamp_builder,
+    )
+    aligned_action_provider = AlignedActionProvider(
+        arm_executor,
+        hand_executor,
+        alignment_tolerance_ms=DEFAULT_ALIGNMENT_TOLERANCE_MS,
+        timestamp_builder=timestamp_builder,
+    )
 
     if first_init:
         robot.move_l(DEFAULT_INITIAL_POSE, 0.2, 0.2)
@@ -326,11 +255,7 @@ def main(cfg: OmegaConf):
 
             step_count = 0
             episode = InterventionEpisodeBuffer(use_wrist_img=use_wrist_img)
-            rtc_stream.reset()
-            arm_executor.reset_episode()
-            arm_executor.start_policy()
-            hand_executor.clear_history()
-            was_human_intervention = False
+            intervention_manager.reset_episode()
 
             while step_count < max_task_length and keyboard_control.is_recording():
                 obs_start_time = time.time()
@@ -350,111 +275,25 @@ def main(cfg: OmegaConf):
                     time.sleep(0.01)
                     continue
 
-                if intervention_active != was_human_intervention:
-                    rtc_stream.reset()
-                    if intervention_active:
-                        arm_executor.start_intervention(obs.arm_mat)
-                        hand_executor.clear_policy_sequence()
-                    else:
-                        arm_executor.start_policy()
-                        hand_executor.clear_policy_sequence()
-                    was_human_intervention = intervention_active
+                intervention_manager.sync(intervention_active, obs)
 
-                timestamps = dict(obs.timestamp_dict)
-                t_action_decision_ns = time.monotonic_ns()
-                timestamps["t_action_decision_ns"] = t_action_decision_ns
-                timestamps["obs_to_action_latency_ms"] = time_delta_ms(
-                    t_action_decision_ns,
-                    timestamps.get("t_anchor_ns"),
+                timestamps = timestamp_builder.begin_action_decision(
+                    obs.timestamp_dict
                 )
+                if not intervention_active:
+                    policy_planner.step(obs, timestamps)
 
-                if intervention_active:
-                    pass
-                else:
-                    policy_command = rtc_stream.step(
-                        obs.qpos,
-                        obs.image,
-                        obs.wrist_image,
-                        obs.arm_mat,
-                    )
-                    valid_sequence = policy_command.get("valid_sequence")
-                    if valid_sequence is not None:
-                        start_delay_steps = int(
-                            valid_sequence.get("start_delay_steps", 0)
-                        )
-                        sequence_start_ns = time.monotonic_ns() + int(
-                            round(start_delay_steps * dt * 1e9)
-                        )
-                        timestamps["policy_sequence_valid_start"] = int(
-                            valid_sequence.get("valid_start", 0)
-                        )
-                        timestamps["policy_sequence_length"] = int(
-                            len(valid_sequence["hand_actions"])
-                        )
-                        timestamps["policy_sequence_start_delay_steps"] = (
-                            start_delay_steps
-                        )
-                        timestamps["t_policy_sequence_start_ns"] = sequence_start_ns
-                        timestamps["t_arm_command_host_ns"] = (
-                            arm_executor.submit_policy_sequence(
-                                valid_sequence,
-                                start_time_ns=sequence_start_ns,
-                                step_period_s=dt,
-                            )
-                        )
-                        hand_targets = np.asarray(
-                            [
-                                hand_action_util(hand_action)
-                                for hand_action in valid_sequence["hand_actions"]
-                            ],
-                            dtype=np.float32,
-                        )
-                        timestamps["t_hand_target_host_ns"] = (
-                            hand_executor.submit_policy_sequence(
-                                hand_targets,
-                                start_time_ns=sequence_start_ns,
-                                step_period_s=dt,
-                            )
-                        )
-
-                arm_motion = arm_executor.motion_at_time_ns(
-                    timestamps.get("t_anchor_ns")
-                )
-                hand_sample = hand_executor.command_at_time_ns(
-                    timestamps.get("t_anchor_ns")
-                )
-                if arm_motion is None or hand_sample is None:
+                aligned_action = aligned_action_provider.read(timestamps)
+                if aligned_action is None:
                     time.sleep(0.001)
                     continue
-
-                add_arm_motion_timestamps(timestamps, arm_motion)
-                add_hand_sample_timestamps(timestamps, hand_sample)
-                if not within_alignment_tolerance(
-                    timestamps,
-                    DEFAULT_ALIGNMENT_TOLERANCE_MS,
-                ):
-                    time.sleep(0.001)
-                    continue
-
-                action = aligned_action_from_samples(arm_motion, hand_sample)
-                aligned_intervention = aligned_intervention_from_samples(
-                    arm_motion,
-                    hand_sample,
-                )
-
-                t_record_end_ns = time.monotonic_ns()
-                timestamps["t_record_end_ns"] = t_record_end_ns
-                timestamps["record_loop_duration_ms"] = time_delta_ms(
-                    t_record_end_ns,
-                    timestamps.get("t_record_start_ns"),
-                )
 
                 episode.append(
                     obs.robot_state,
                     obs.cam_dict,
-                    action,
-                    aligned_intervention,
-                    timestamps,
+                    aligned_action.action,
+                    aligned_action.intervention,
+                    aligned_action.timestamps,
                 )
                 step_count += 1
 

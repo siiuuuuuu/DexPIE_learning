@@ -28,6 +28,8 @@ class RecapDatasetImage(BaseDataset):
             use_wrist_img=False,
             use_depth=False,
             use_relative_action=True,
+            use_precomputed_advantage=True,
+            advantage_key='advantage',
             ):
         super().__init__()
         cprint(f'Loading RecapDatasetImage from {zarr_path}', 'green')
@@ -37,6 +39,8 @@ class RecapDatasetImage(BaseDataset):
         self.use_wrist_img = use_wrist_img
         self.use_depth = use_depth
         self.use_relative_action = use_relative_action
+        self.use_precomputed_advantage = use_precomputed_advantage
+        self.advantage_key = advantage_key
         self.n_obs_steps = n_obs_steps
         self.n_action_steps = n_action_steps
         self.tools=MATHTOOLS()
@@ -47,10 +51,19 @@ class RecapDatasetImage(BaseDataset):
         ] 
         disk_replay_buffer = ReplayBuffer.create_from_path(zarr_path)
         self.has_intervention = 'intervention' in disk_replay_buffer.keys()
+        self.has_advantage = self.use_precomputed_advantage and (self.advantage_key in disk_replay_buffer.keys())
         if self.has_intervention:
             buffer_keys.append('intervention')
         else:
             cprint("No 'intervention' in dataset, mark expert samples as intervention-positive.", 'yellow')
+        if self.has_advantage:
+            buffer_keys.append(self.advantage_key)
+            cprint(f"Using precomputed advantage from data/{self.advantage_key}.", 'cyan')
+        elif self.use_precomputed_advantage:
+            cprint(
+                f"No data/{self.advantage_key} in dataset; Recap/DexPIE training requires offline advantage labels.",
+                'yellow'
+            )
         if self.use_img:
             buffer_keys.append('img') # Match the image key used during data collection.
         if self.use_wrist_img:
@@ -165,6 +178,10 @@ class RecapDatasetImage(BaseDataset):
             data['obs']['depth'] = depth
         if self.use_relative_action:
             data['action']=action.astype(np.float32)
+        if self.has_advantage:
+            valid_indices = np.flatnonzero(sample["mask"])
+            first_valid_idx = int(valid_indices[0]) if len(valid_indices) > 0 else 0
+            data['advantage'] = np.array(sample[self.advantage_key][first_valid_idx], dtype=np.float32)
         
         data['mask']=sample["mask"]
         data['intervention']=intervent_positive

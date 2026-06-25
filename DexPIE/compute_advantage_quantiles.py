@@ -15,11 +15,10 @@ import hydra
 import numpy as np
 import torch
 import tqdm
+import zarr
 from omegaconf import OmegaConf, open_dict
 from termcolor import cprint
-from torch.utils.data import DataLoader
 
-from dexpie.common.pytorch_util import dict_apply
 from dexpie.workspace.critic_workspace import CriticWorkspace
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -88,6 +87,118 @@ def parse_top_percentages(cfg: OmegaConf) -> List[float]:
     return top_percentages
 
 
+def get_dataset_flag(cfg: OmegaConf, key: str, default: bool) -> bool:
+    value = cfg.task.dataset.get(key, default)
+    return bool(value)
+
+
+def collect_values_from_zarr(
+    zarr_root: zarr.Group,
+    value_critic: torch.nn.Module,
+    cfg: OmegaConf,
+    device: torch.device,
+) -> np.ndarray:
+    data_group = zarr_root["data"]
+    state_arr = data_group["state"]
+    n_steps = int(state_arr.shape[0])
+    use_img = get_dataset_flag(cfg, "use_img", True)
+    use_wrist_img = get_dataset_flag(cfg, "use_wrist_img", False)
+
+    if use_img and "img" not in data_group:
+        raise KeyError("Dataset config requires `img`, but zarr data/img is missing.")
+    if use_wrist_img and "wrist_img" not in data_group:
+        raise KeyError("Dataset config requires `wrist_img`, but zarr data/wrist_img is missing.")
+
+    batch_size = int(cfg.get("advantage_eval_batch_size", cfg.dataloader.batch_size))
+    values = np.empty((n_steps,), dtype=np.float32)
+
+    for start in tqdm.tqdm(range(0, n_steps, batch_size), desc="Evaluate critic values"):
+        stop = min(start + batch_size, n_steps)
+        obs = {
+            "agent_pos": torch.from_numpy(
+                state_arr[start:stop, :6].astype(np.float32)
+            ).unsqueeze(1).to(device, non_blocking=True),
+        }
+        if use_img:
+            obs["image"] = torch.from_numpy(
+                data_group["img"][start:stop]
+            ).unsqueeze(1).to(device, non_blocking=True)
+        if use_wrist_img:
+            obs["wrist_img"] = torch.from_numpy(
+                data_group["wrist_img"][start:stop]
+            ).unsqueeze(1).to(device, non_blocking=True)
+
+        obs_for_value = prepare_obs_once(obs)
+        batch_value = value_critic(obs_for_value, obs_preprocessed=True)  # [B,1,1]
+        values[start:stop] = batch_value[:, 0, 0].detach().cpu().numpy().astype(np.float32)
+
+        del obs
+        del obs_for_value
+        del batch_value
+
+    if not np.all(np.isfinite(values)):
+        raise RuntimeError("Critic produced non-finite values; refuse to write invalid advantages.")
+
+    return values
+
+
+def compute_horizon_window_advantages(
+    values: np.ndarray,
+    episode_ends: np.ndarray,
+    horizon: int,
+    max_length: float,
+) -> np.ndarray:
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got: {horizon}")
+    if max_length <= 0:
+        raise ValueError(f"max_length must be positive, got: {max_length}")
+
+    advantages = np.zeros_like(values, dtype=np.float32)
+    episode_starts = np.concatenate(([0], episode_ends[:-1])).astype(np.int64)
+
+    for start, end in zip(episode_starts, episode_ends):
+        start = int(start)
+        end = int(end)
+        if end <= start:
+            continue
+        idxs = np.arange(start, end, dtype=np.int64)
+        end_idxs = np.minimum(idxs + horizon - 1, end - 1)
+        valid_offsets = (end_idxs - idxs).astype(np.float32)
+        advantages[idxs] = (
+            -(valid_offsets / float(max_length))
+            + values[end_idxs]
+            - values[idxs]
+        ).astype(np.float32)
+
+    return advantages
+
+
+def write_advantage_to_zarr(
+    zarr_root: zarr.Group,
+    advantage_key: str,
+    advantages: np.ndarray,
+    overwrite: bool,
+) -> None:
+    data_group = zarr_root["data"]
+    if advantage_key in data_group:
+        if not overwrite:
+            raise FileExistsError(
+                f"zarr data/{advantage_key} already exists. "
+                "Set +overwrite_advantage=True to replace it."
+            )
+        del data_group[advantage_key]
+
+    chunk_len = min(max(int(data_group["state"].chunks[0]), 1), int(advantages.shape[0]))
+    data_group.array(
+        name=advantage_key,
+        data=advantages.astype(np.float32),
+        chunks=(chunk_len,),
+        dtype=np.float32,
+        compressor=data_group["state"].compressor,
+        overwrite=True,
+    )
+
+
 @hydra.main(
     config_path=str(pathlib.Path(__file__).parent.joinpath("dexpie", "config")),
     config_name="DexPIE",
@@ -114,48 +225,56 @@ def main(cfg: OmegaConf):
     device = resolve_device(str(cfg.training.device))
     value_critic, max_length, use_ema = load_frozen_value_critic(ckpt_path, device)
 
-    dataset = hydra.utils.instantiate(cfg.task.dataset)
-    dataloader_cfg = OmegaConf.to_container(cfg.dataloader, resolve=True)
-    dataloader_cfg["shuffle"] = False
-    dataloader = DataLoader(dataset, **dataloader_cfg)
+    zarr_root = zarr.open(str(zarr_path), mode="r+")
+    if "data" not in zarr_root or "meta" not in zarr_root:
+        raise KeyError(f"Invalid replay zarr: missing data/meta group in {zarr_path}")
+    if "episode_ends" not in zarr_root["meta"]:
+        raise KeyError(f"Invalid replay zarr: missing meta/episode_ends in {zarr_path}")
 
-    all_advantages: List[torch.Tensor] = []
+    episode_ends = zarr_root["meta"]["episode_ends"][:].astype(np.int64)
+    n_steps = int(zarr_root["data"]["state"].shape[0])
+    if len(episode_ends) == 0 or int(episode_ends[-1]) != n_steps:
+        raise ValueError(
+            f"episode_ends[-1] must equal n_steps. got "
+            f"episode_ends[-1]={episode_ends[-1] if len(episode_ends) else None}, n_steps={n_steps}"
+        )
 
-    cprint(f"[Info] dataset size: {len(dataset)}", "cyan")
+    advantage_key = str(cfg.get("advantage_key", "advantage"))
+    overwrite_advantage = bool(cfg.get("overwrite_advantage", True))
+
+    cprint(f"[Info] dataset steps: {n_steps}", "cyan")
+    cprint(f"[Info] dataset episodes: {len(episode_ends)}", "cyan")
     cprint(f"[Info] critic ckpt: {ckpt_path}", "cyan")
     cprint(f"[Info] use EMA critic: {use_ema}", "cyan")
     cprint(f"[Info] max_length: {max_length}", "cyan")
+    cprint(f"[Info] advantage key: data/{advantage_key}", "cyan")
 
     with torch.inference_mode():
-        for batch in tqdm.tqdm(dataloader, desc="Collect advantages"):
-            batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-            obs_for_value = prepare_obs_once(batch["obs"])
+        values = collect_values_from_zarr(
+            zarr_root=zarr_root,
+            value_critic=value_critic,
+            cfg=cfg,
+            device=device,
+        )
 
-            batch_value = value_critic(obs_for_value, obs_preprocessed=True)  # [B,T,1]
-            valid_steps = batch["mask"].float().sum(dim=-1).clamp(min=1.0, max=float(batch_value.shape[1]))
-            valid_offset = valid_steps - 1.0
-            mid_return = -(valid_offset / max_length)
-            v_last = batch_value[:, -1, 0]
-            v_first = batch_value[:, 0, 0]
-            advantage = mid_return + v_last - v_first  # [B]
-            all_advantages.append(advantage.detach().cpu())
-
-            del batch
-            del obs_for_value
-            del batch_value
-            del v_last
-            del v_first
-            del advantage
-
-    if len(all_advantages) == 0:
-        raise RuntimeError("No advantages collected. Please check dataset/dataloader settings.")
-    all_adv = torch.cat(all_advantages, dim=0).float()
+    advantages = compute_horizon_window_advantages(
+        values=values,
+        episode_ends=episode_ends,
+        horizon=int(cfg.horizon),
+        max_length=max_length,
+    )
+    write_advantage_to_zarr(
+        zarr_root=zarr_root,
+        advantage_key=advantage_key,
+        advantages=advantages,
+        overwrite=overwrite_advantage,
+    )
 
     top_percentages = parse_top_percentages(cfg)
     top_stats = []
     for top_p in top_percentages:
         q = 1.0 - top_p / 100.0
-        q_value = torch.quantile(all_adv, q).item()
+        q_value = float(np.quantile(advantages, q))
         top_stats.append(
             {
                 "top_percentage": top_p,
@@ -176,14 +295,34 @@ def main(cfg: OmegaConf):
         "critic_use_ema": bool(use_ema),
         "horizon": int(cfg.horizon),
         "max_length": max_length,
-        "num_samples": int(all_adv.numel()),
+        "advantage_method": "horizon_window_nstep",
+        "advantage_key": advantage_key,
+        "overwrite_advantage": overwrite_advantage,
+        "num_samples": int(advantages.shape[0]),
+        "num_episodes": int(len(episode_ends)),
         "advantage_quantiles": top_stats,
     }
+
+    label_info = {
+        "generated_at": result["generated_at"],
+        "dataset_zarr_path": str(zarr_path),
+        "value_critic_ckpt_path": str(ckpt_path),
+        "critic_use_ema": bool(use_ema),
+        "method": "horizon_window_nstep",
+        "formula": "advantage[t] = -(end_t - t) / max_length + V[end_t] - V[t]",
+        "advantage_key": advantage_key,
+        "horizon": int(cfg.horizon),
+        "max_length": max_length,
+        "num_steps": int(advantages.shape[0]),
+        "num_episodes": int(len(episode_ends)),
+    }
+    zarr_root.attrs["advantage_label_info"] = label_info
 
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
     cprint(f"[Done] Saved advantage quantiles to: {output_path}", "green")
+    cprint(f"[Done] Wrote zarr data/{advantage_key}, shape={advantages.shape}, dtype=float32", "green")
     for item in top_stats:
         cprint(
             f"top {item['top_percentage']:.0f}% -> q={item['quantile']:.3f}, thr={item['advantage_threshold']:.6f}",
