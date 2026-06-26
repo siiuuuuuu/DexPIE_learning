@@ -107,7 +107,10 @@ class RTCActionStream:
             self.pending_ref = None
             return None
 
-        valid_start = min(self.max_latency_step, self.action_horizon - 1)
+        # RTC policies already drop the executed prefix from their returned
+        # action sequence when exc_action is provided, so the first returned
+        # action is the first future action that should be executed.
+        valid_start = 0
         self.action_cursor = valid_start
         self.arm_mats = self._absolute_arm_mats(self.policy_ref_mat, self.np_action)
         self.pending_ref = None

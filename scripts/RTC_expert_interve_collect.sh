@@ -1,13 +1,13 @@
 # Examples:
 # RTC policy expert-intervention collection script.
 
-# bash scripts/RTC_expert_interve_collect.sh RTC_dp_224x224_r3m dp-image 0310
+# bash scripts/RTC_expert_interve_collect.sh RTC_dp_224x224_r3m two-image 0310
 # bash scripts/RTC_expert_interve_collect.sh RTC_Recap Recap-image 0312
 # bash scripts/RTC_expert_interve_collect.sh RTC_sigRecap Recap-image 0507_task1_iter1
 
 wandb_mode=offline
 #dataset_path=/home/lrz/dp_data/train_data
-dataset_path=/home/lrz/dp_data/train_yangfang_1_data
+dataset_path=/home/lrz/dp_data/zarr_task1
 
 
 DEBUG=False
