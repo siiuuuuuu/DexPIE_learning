@@ -54,11 +54,11 @@ DEFAULT_HAND_EXECUTOR_HZ = 120.0
 DEFAULT_HAND_INTERVENTION_W = 25.0  # Natural frequency; larger values track targets faster.
 DEFAULT_HAND_INTERVENTION_Z = 0.8  # Damping ratio; larger values reduce overshoot and smooth motion.
 DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task3_iter1"
-DEFAULT_CONTROL_DT = 1.0 / 25
+DEFAULT_CONTROL_DT = 1.0 / 30.0
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_MAX_TASK_LENGTH = 1000  # Max task length used to normalize reward calculation.
 DEFAULT_ROBOT_STATE_FREQUENCY = 125.0
-DEFAULT_ARM_SERVO_FREQUENCY = 25
+DEFAULT_ARM_SERVO_FREQUENCY = 60
 DEFAULT_TRACKER_FREQUENCY = 60.0
 DEFAULT_MANUS_TIMEOUT = 0.25
 DEFAULT_HUMAN_HAND_UPDATE_FREQUENCY = 120.0
@@ -66,6 +66,8 @@ DEFAULT_ALIGNMENT_TOLERANCE_MS = 25.0
 DEFAULT_FRONT_CAMERA_FPS = 30
 DEFAULT_WRIST_CAMERA_FPS = 60
 DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
+DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 5.0
+DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 3.0
 
 
 @ray.remote(num_gpus=1)
@@ -199,6 +201,7 @@ def main(cfg: OmegaConf):
         use_wrist_img=use_wrist_img,
         robot_state_reader=robot_state_reader,
         alignment_tolerance_ms=DEFAULT_ALIGNMENT_TOLERANCE_MS,
+        history_wait_timeout_ms=DEFAULT_HISTORY_WAIT_TIMEOUT_MS,
     )
     timestamp_builder = RTCTimestampBuilder()
     intervention_manager = InterventionModeManager(
@@ -218,6 +221,7 @@ def main(cfg: OmegaConf):
         hand_executor,
         alignment_tolerance_ms=DEFAULT_ALIGNMENT_TOLERANCE_MS,
         timestamp_builder=timestamp_builder,
+        history_wait_timeout_ms=DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS,
     )
 
     if first_init:
@@ -256,9 +260,9 @@ def main(cfg: OmegaConf):
             step_count = 0
             episode = InterventionEpisodeBuffer(use_wrist_img=use_wrist_img)
             intervention_manager.reset_episode()
+            obs_builder.reset_episode()
 
             while step_count < max_task_length and keyboard_control.is_recording():
-                obs_start_time = time.time()
                 intervention_active = keyboard_control.is_intervening()
 
                 if not robot.is_ready():
@@ -296,9 +300,6 @@ def main(cfg: OmegaConf):
                     aligned_action.timestamps,
                 )
                 step_count += 1
-
-                loop_end_time = time.time()
-                time.sleep(max(0, dt - (loop_end_time - obs_start_time)))
 
             # Stop servo before ending the recording.
             arm_executor.set_idle(stop_servo=True)

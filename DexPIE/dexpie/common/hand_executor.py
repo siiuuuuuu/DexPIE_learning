@@ -227,6 +227,13 @@ class HighRateHandExecutor:
                 return None
             return self._copy_command_sample(self.latest_command_sample_value)
 
+    def latest_command_time_ns(self):
+        self.raise_if_failed()
+        with self.lock:
+            if self.latest_command_sample_value is None:
+                return None
+            return int(self.latest_command_sample_value["t_hand_action_host_ns"])
+
     def command_at_time_ns(self, target_time_ns):
         self.raise_if_failed()
         with self.lock:

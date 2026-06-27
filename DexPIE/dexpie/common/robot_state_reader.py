@@ -38,6 +38,12 @@ class HighRateRobotStateReader:
                 return None
             return dict(self._samples[-1])
 
+    def latest_obs_time_ns(self):
+        with self._lock:
+            if not self._samples:
+                return None
+            return int(self._samples[-1].get("t_robot_obs_host_ns"))
+
     def obs_at_time_ns(self, target_time_ns):
         with self._lock:
             samples = list(self._samples)

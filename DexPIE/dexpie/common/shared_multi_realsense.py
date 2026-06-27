@@ -242,6 +242,39 @@ class SharedFrameRingAccessor:
             }
             return sample
 
+    def next_after_seq(self, last_seq, copy_frame=False):
+        if last_seq is None:
+            return self.latest(copy_frame=copy_frame)
+
+        last_seq = int(last_seq)
+        with self.lock:
+            best_idx = -1
+            best_seq = None
+            for idx in range(self.slots):
+                if self.slot_valid[idx] == 0:
+                    continue
+                seq = int(self.slot_seq[idx])
+                if seq <= last_seq:
+                    continue
+                if best_seq is None or seq < best_seq:
+                    best_seq = seq
+                    best_idx = idx
+
+            if best_idx < 0:
+                return None
+
+            sample = {
+                "seq": int(self.slot_seq[best_idx]),
+                "t_host_ns": int(self.slot_host_ns[best_idx]),
+                "t_dev_ts": float(self.slot_dev_ts[best_idx]),
+                "frame_no": int(self.slot_frame_no[best_idx]),
+                "slot_idx": best_idx,
+                "frame": self.arr[best_idx].copy()
+                if copy_frame
+                else self.arr[best_idx],
+            }
+            return sample
+
     def nearest_by_host_time(self, target_host_ns, copy_frame=False):
         target_host_ns = int(target_host_ns)
         with self.lock:
@@ -531,6 +564,25 @@ class MultiRealSense:
         return sample
 
     @staticmethod
+    def _wait_next_after_seq(
+        reader,
+        last_seq,
+        timeout_ms=None,
+        sleep_s=0.001,
+    ):
+        deadline = None
+        if timeout_ms is not None:
+            deadline = time.monotonic() + max(0.0, timeout_ms) / 1000.0
+
+        sample = reader.next_after_seq(last_seq, copy_frame=True)
+        while sample is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            time.sleep(sleep_s)
+            sample = reader.next_after_seq(last_seq, copy_frame=True)
+        return sample
+
+    @staticmethod
     def _wait_nearest_by_host_time(
         reader,
         target_host_ns,
@@ -555,11 +607,29 @@ class MultiRealSense:
             time.sleep(sleep_s)
 
     def __call__(self):
+        return self._read()
+
+    def read_next(self, last_front_seq=None, timeout_ms=None):
+        return self._read(
+            next_front_after_seq=last_front_seq,
+            next_front_timeout_ms=timeout_ms,
+        )
+
+    def _read(self, next_front_after_seq=None, next_front_timeout_ms=None):
         cam_dict = {}
         front = None
 
         if self.use_front_cam:
-            front = self._wait_latest(self.front_reader)
+            if next_front_after_seq is None:
+                front = self._wait_latest(self.front_reader)
+            else:
+                front = self._wait_next_after_seq(
+                    self.front_reader,
+                    next_front_after_seq,
+                    timeout_ms=next_front_timeout_ms,
+                )
+                if front is None:
+                    return None
             cam_dict.update(
                 {
                     "front_color": front["frame"],

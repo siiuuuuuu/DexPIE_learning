@@ -235,14 +235,19 @@ class AlignedActionProvider:
         hand_executor,
         alignment_tolerance_ms=25.0,
         timestamp_builder=None,
+        history_wait_timeout_ms=3.0,
+        history_wait_sleep_s=0.0005,
     ):
         self.arm_executor = arm_executor
         self.hand_executor = hand_executor
         self.alignment_tolerance_ms = float(alignment_tolerance_ms)
         self.timestamp_builder = timestamp_builder or RTCTimestampBuilder()
+        self.history_wait_timeout_ms = max(0.0, float(history_wait_timeout_ms))
+        self.history_wait_sleep_s = max(0.0, float(history_wait_sleep_s))
 
     def read(self, timestamps):
         anchor_ns = timestamps.get("t_anchor_ns")
+        self._wait_histories_cover_anchor(anchor_ns)
         arm_motion = self.arm_executor.motion_at_time_ns(anchor_ns)
         hand_sample = self.hand_executor.command_at_time_ns(anchor_ns)
         if arm_motion is None or hand_sample is None:
@@ -278,3 +283,34 @@ class AlignedActionProvider:
             arm_mode == ARM_MODE_INTERVENTION
             or hand_mode == HAND_MODE_INTERVENTION
         )
+
+    def _wait_histories_cover_anchor(self, anchor_ns):
+        if anchor_ns is None or self.history_wait_timeout_ms <= 0.0:
+            return False
+
+        anchor_ns = int(anchor_ns)
+        deadline_ns = time.monotonic_ns() + int(
+            self.history_wait_timeout_ms * 1e6
+        )
+        while time.monotonic_ns() < deadline_ns:
+            if self._histories_cover_anchor(anchor_ns):
+                return True
+            time.sleep(self.history_wait_sleep_s)
+
+        return self._histories_cover_anchor(anchor_ns)
+
+    def _histories_cover_anchor(self, anchor_ns):
+        return (
+            self._covers_anchor(
+                self.arm_executor.latest_action_time_ns(),
+                anchor_ns,
+            )
+            and self._covers_anchor(
+                self.hand_executor.latest_command_time_ns(),
+                anchor_ns,
+            )
+        )
+
+    @staticmethod
+    def _covers_anchor(latest_time_ns, anchor_ns):
+        return latest_time_ns is not None and int(latest_time_ns) >= int(anchor_ns)

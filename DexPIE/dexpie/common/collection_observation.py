@@ -27,6 +27,10 @@ class ObservationBuilder:
         use_wrist_img=False,
         robot_state_reader=None,
         alignment_tolerance_ms=25.0,
+        camera_paced=True,
+        camera_frame_timeout_ms=None,
+        history_wait_timeout_ms=5.0,
+        history_wait_sleep_s=0.0005,
     ):
         self.camera = camera
         self.robot = robot
@@ -34,10 +38,24 @@ class ObservationBuilder:
         self.use_wrist_img = bool(use_wrist_img)
         self.robot_state_reader = robot_state_reader
         self.alignment_tolerance_ms = float(alignment_tolerance_ms)
+        self.camera_paced = bool(camera_paced)
+        self.camera_frame_timeout_ms = camera_frame_timeout_ms
+        self.history_wait_timeout_ms = max(0.0, float(history_wait_timeout_ms))
+        self.history_wait_sleep_s = max(0.0, float(history_wait_sleep_s))
+        self.last_front_camera_seq = None
+
+    def reset_episode(self):
+        self.last_front_camera_seq = None
+        if self.camera_paced and hasattr(self.camera, "read_next"):
+            cam_dict = self.camera()
+            front_meta = cam_dict.get("front_meta", {})
+            self.last_front_camera_seq = front_meta.get("seq")
 
     def read(self):
         t_record_start_ns = time.monotonic_ns()
-        cam_dict = self.camera()
+        cam_dict = self._read_camera()
+        if cam_dict is None:
+            return None
         t_camera_read_ns = time.monotonic_ns()
 
         image = cam_dict["front_color"]
@@ -45,9 +63,12 @@ class ObservationBuilder:
 
         front_meta = cam_dict.get("front_meta", {})
         wrist_meta = cam_dict.get("right_meta", {}) if self.use_wrist_img else {}
+        self.last_front_camera_seq = front_meta.get("seq")
         anchor_ns = front_meta.get("t_host_ns")
         if anchor_ns is None:
             anchor_ns = t_camera_read_ns
+
+        self._wait_robot_history_cover_anchor(anchor_ns)
 
         robot_obs = self._read_robot_obs(anchor_ns)
         if robot_obs is None:
@@ -103,6 +124,43 @@ class ObservationBuilder:
         robot_obs = dict(robot_obs)
         robot_obs["t_robot_obs_host_ns"] = time.monotonic_ns()
         return robot_obs
+
+    def _read_camera(self):
+        if self.camera_paced and hasattr(self.camera, "read_next"):
+            return self.camera.read_next(
+                last_front_seq=self.last_front_camera_seq,
+                timeout_ms=self.camera_frame_timeout_ms,
+            )
+        return self.camera()
+
+    def _wait_robot_history_cover_anchor(self, anchor_ns):
+        if (
+            self.robot_state_reader is None
+            or self.history_wait_timeout_ms <= 0.0
+            or not hasattr(self.robot_state_reader, "latest_obs_time_ns")
+        ):
+            return False
+
+        anchor_ns = int(anchor_ns)
+        deadline_ns = time.monotonic_ns() + int(
+            self.history_wait_timeout_ms * 1e6
+        )
+        while time.monotonic_ns() < deadline_ns:
+            if self._covers_anchor(
+                self.robot_state_reader.latest_obs_time_ns(),
+                anchor_ns,
+            ):
+                return True
+            time.sleep(self.history_wait_sleep_s)
+
+        return self._covers_anchor(
+            self.robot_state_reader.latest_obs_time_ns(),
+            anchor_ns,
+        )
+
+    @staticmethod
+    def _covers_anchor(latest_time_ns, anchor_ns):
+        return latest_time_ns is not None and int(latest_time_ns) >= int(anchor_ns)
 
 
 def _delta_ms(t_ns, ref_ns):

@@ -227,6 +227,18 @@ class HighRateArmExecutor:
                 return None
             return self._copy_motion(self._latest_motion)
 
+    def latest_action_time_ns(self):
+        self.raise_if_failed()
+        with self._motion_lock:
+            if self._latest_motion is None:
+                return None
+            return int(
+                np.asarray(
+                    self._latest_motion["t_arm_action_host_ns"],
+                    dtype=np.int64,
+                ).item()
+            )
+
     def motion_at_time_ns(self, target_time_ns):
         self.raise_if_failed()
         with self._motion_lock:
