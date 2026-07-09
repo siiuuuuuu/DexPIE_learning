@@ -37,6 +37,49 @@ def get_realsense_id():
     return devices
 
 
+def enum_name(value):
+    text = str(value)
+    if "." in text:
+        return text.rsplit(".", 1)[-1]
+    return text
+
+
+def is_global_domain(domain_name):
+    text = str(domain_name).lower()
+    return "global" in text or "system" in text
+
+
+def maybe_get_metadata(frame, metadata_name):
+    metadata = getattr(rs.frame_metadata_value, metadata_name, None)
+    if metadata is None:
+        return None
+    try:
+        if frame.supports_frame_metadata(metadata):
+            return frame.get_frame_metadata(metadata)
+    except Exception:
+        return None
+    return None
+
+
+def set_global_time(profile, enabled=True):
+    for sensor in profile.get_device().query_sensors():
+        try:
+            sensor_name = sensor.get_info(rs.camera_info.name)
+        except Exception:
+            sensor_name = "unknown sensor"
+        if not sensor.supports(rs.option.global_time_enabled):
+            continue
+        sensor.set_option(rs.option.global_time_enabled, 1.0 if enabled else 0.0)
+        status = "enabled" if enabled else "disabled"
+        print(f"global_time_enabled on {sensor_name}: {status}", flush=True)
+
+
+def global_timestamp_to_mono_ns(timestamp_ms, domain_name, epoch_ns, mono_ns):
+    if not is_global_domain(domain_name):
+        return None
+    return int(round(float(timestamp_ms) * 1e6)) - (int(epoch_ns) - int(mono_ns))
+
+
 def init_given_realsense_D415(
     device,
     enable_rgb=True,
@@ -60,6 +103,7 @@ def init_given_realsense_D415(
 
     config.resolve(pipeline)
     profile = pipeline.start(config)
+    set_global_time(profile, enabled=True)
 
     if enable_depth:
         depth_sensor = profile.get_device().first_depth_sensor()
@@ -141,7 +185,22 @@ class SharedFrameRing:
 
         self.slot_seq = mp.Array(ctypes.c_ulonglong, self.slots, lock=False)
         self.slot_host_ns = mp.Array(ctypes.c_ulonglong, self.slots, lock=False)
+        self.slot_receive_host_ns = mp.Array(
+            ctypes.c_ulonglong, self.slots, lock=False
+        )
         self.slot_dev_ts = mp.Array(ctypes.c_double, self.slots, lock=False)
+        self.slot_sensor_timestamp_us = mp.Array(
+            ctypes.c_double, self.slots, lock=False
+        )
+        self.slot_frame_global_mono_ns = mp.Array(
+            ctypes.c_ulonglong, self.slots, lock=False
+        )
+        self.slot_timestamp_fit_residual_ms = mp.Array(
+            ctypes.c_double, self.slots, lock=False
+        )
+        self.slot_receive_minus_image_ms = mp.Array(
+            ctypes.c_double, self.slots, lock=False
+        )
         self.slot_frame_no = mp.Array(ctypes.c_ulonglong, self.slots, lock=False)
         self.slot_valid = mp.Array(ctypes.c_byte, self.slots, lock=False)
 
@@ -156,7 +215,12 @@ class SharedFrameRing:
             "latest_idx": self.latest_idx,
             "slot_seq": self.slot_seq,
             "slot_host_ns": self.slot_host_ns,
+            "slot_receive_host_ns": self.slot_receive_host_ns,
             "slot_dev_ts": self.slot_dev_ts,
+            "slot_sensor_timestamp_us": self.slot_sensor_timestamp_us,
+            "slot_frame_global_mono_ns": self.slot_frame_global_mono_ns,
+            "slot_timestamp_fit_residual_ms": self.slot_timestamp_fit_residual_ms,
+            "slot_receive_minus_image_ms": self.slot_receive_minus_image_ms,
             "slot_frame_no": self.slot_frame_no,
             "slot_valid": self.slot_valid,
         }
@@ -190,7 +254,12 @@ class SharedFrameRingAccessor:
         self.latest_idx = desc["latest_idx"]
         self.slot_seq = desc["slot_seq"]
         self.slot_host_ns = desc["slot_host_ns"]
+        self.slot_receive_host_ns = desc["slot_receive_host_ns"]
         self.slot_dev_ts = desc["slot_dev_ts"]
+        self.slot_sensor_timestamp_us = desc["slot_sensor_timestamp_us"]
+        self.slot_frame_global_mono_ns = desc["slot_frame_global_mono_ns"]
+        self.slot_timestamp_fit_residual_ms = desc["slot_timestamp_fit_residual_ms"]
+        self.slot_receive_minus_image_ms = desc["slot_receive_minus_image_ms"]
         self.slot_frame_no = desc["slot_frame_no"]
         self.slot_valid = desc["slot_valid"]
 
@@ -199,9 +268,24 @@ class SharedFrameRingAccessor:
             (self.slots, *self.shape), dtype=self.dtype, buffer=self.shm.buf
         )
 
-    def publish(self, frame, t_host_ns, t_dev_ts, frame_no):
+    def publish(
+        self,
+        frame,
+        t_host_ns,
+        t_dev_ts,
+        frame_no,
+        t_receive_host_ns=None,
+        sensor_timestamp_us=None,
+        frame_global_mono_ns=None,
+        timestamp_fit_residual_ms=float("nan"),
+        receive_minus_image_ms=None,
+    ):
         if frame is None:
             return
+        if t_receive_host_ns is None:
+            t_receive_host_ns = t_host_ns
+        if receive_minus_image_ms is None:
+            receive_minus_image_ms = (int(t_receive_host_ns) - int(t_host_ns)) / 1e6
 
         if frame.dtype != self.dtype:
             frame = frame.astype(self.dtype, copy=False)
@@ -219,7 +303,20 @@ class SharedFrameRingAccessor:
 
             self.slot_seq[idx] = seq
             self.slot_host_ns[idx] = int(t_host_ns)
+            self.slot_receive_host_ns[idx] = int(t_receive_host_ns)
             self.slot_dev_ts[idx] = float(t_dev_ts)
+            self.slot_sensor_timestamp_us[idx] = (
+                float("nan")
+                if sensor_timestamp_us is None
+                else float(sensor_timestamp_us)
+            )
+            self.slot_frame_global_mono_ns[idx] = (
+                0 if frame_global_mono_ns is None else int(frame_global_mono_ns)
+            )
+            self.slot_timestamp_fit_residual_ms[idx] = float(
+                timestamp_fit_residual_ms
+            )
+            self.slot_receive_minus_image_ms[idx] = float(receive_minus_image_ms)
             self.slot_frame_no[idx] = int(frame_no)
             self.slot_valid[idx] = 1
 
@@ -235,7 +332,16 @@ class SharedFrameRingAccessor:
             sample = {
                 "seq": int(self.slot_seq[idx]),
                 "t_host_ns": int(self.slot_host_ns[idx]),
+                "t_receive_host_ns": int(self.slot_receive_host_ns[idx]),
                 "t_dev_ts": float(self.slot_dev_ts[idx]),
+                "sensor_timestamp_us": float(self.slot_sensor_timestamp_us[idx]),
+                "frame_global_mono_ns": int(self.slot_frame_global_mono_ns[idx]),
+                "timestamp_fit_residual_ms": float(
+                    self.slot_timestamp_fit_residual_ms[idx]
+                ),
+                "receive_minus_image_ms": float(
+                    self.slot_receive_minus_image_ms[idx]
+                ),
                 "frame_no": int(self.slot_frame_no[idx]),
                 "slot_idx": idx,
                 "frame": self.arr[idx].copy() if copy_frame else self.arr[idx],
@@ -266,7 +372,20 @@ class SharedFrameRingAccessor:
             sample = {
                 "seq": int(self.slot_seq[best_idx]),
                 "t_host_ns": int(self.slot_host_ns[best_idx]),
+                "t_receive_host_ns": int(self.slot_receive_host_ns[best_idx]),
                 "t_dev_ts": float(self.slot_dev_ts[best_idx]),
+                "sensor_timestamp_us": float(
+                    self.slot_sensor_timestamp_us[best_idx]
+                ),
+                "frame_global_mono_ns": int(
+                    self.slot_frame_global_mono_ns[best_idx]
+                ),
+                "timestamp_fit_residual_ms": float(
+                    self.slot_timestamp_fit_residual_ms[best_idx]
+                ),
+                "receive_minus_image_ms": float(
+                    self.slot_receive_minus_image_ms[best_idx]
+                ),
                 "frame_no": int(self.slot_frame_no[best_idx]),
                 "slot_idx": best_idx,
                 "frame": self.arr[best_idx].copy()
@@ -296,7 +415,20 @@ class SharedFrameRingAccessor:
             sample = {
                 "seq": int(self.slot_seq[best_idx]),
                 "t_host_ns": int(self.slot_host_ns[best_idx]),
+                "t_receive_host_ns": int(self.slot_receive_host_ns[best_idx]),
                 "t_dev_ts": float(self.slot_dev_ts[best_idx]),
+                "sensor_timestamp_us": float(
+                    self.slot_sensor_timestamp_us[best_idx]
+                ),
+                "frame_global_mono_ns": int(
+                    self.slot_frame_global_mono_ns[best_idx]
+                ),
+                "timestamp_fit_residual_ms": float(
+                    self.slot_timestamp_fit_residual_ms[best_idx]
+                ),
+                "receive_minus_image_ms": float(
+                    self.slot_receive_minus_image_ms[best_idx]
+                ),
                 "frame_no": int(self.slot_frame_no[best_idx]),
                 "slot_idx": best_idx,
                 "sync_delta_to_target_ms": delta_ns / 1e6,
@@ -354,6 +486,8 @@ class SingleVisionProcess(mp.Process):
 
     def get_vision(self):
         frame = self.pipeline.wait_for_frames()
+        wait_return_epoch_ns = time.time_ns()
+        wait_return_mono_ns = time.monotonic_ns()
 
         if self.enable_depth:
             aligned_frames = self.align.process(frame)
@@ -391,6 +525,21 @@ class SingleVisionProcess(mp.Process):
             depth_frame = None
             point_cloud_frame = None
 
+        timestamp_domain = enum_name(color_frame_obj.get_frame_timestamp_domain())
+        sensor_timestamp_us = maybe_get_metadata(color_frame_obj, "sensor_timestamp")
+        frame_global_mono_ns = global_timestamp_to_mono_ns(
+            frame_ts,
+            timestamp_domain,
+            wait_return_epoch_ns,
+            wait_return_mono_ns,
+        )
+        timestamp_info = {
+            "timestamp_domain": timestamp_domain,
+            "sensor_timestamp_us": sensor_timestamp_us,
+            "frame_global_mono_ns": frame_global_mono_ns,
+            "wait_return_mono_ns": wait_return_mono_ns,
+        }
+
         if self.resize:
             if self.enable_rgb:
                 color_frame = cv2.resize(
@@ -405,7 +554,14 @@ class SingleVisionProcess(mp.Process):
                     interpolation=cv2.INTER_LINEAR,
                 )
 
-        return color_frame, depth_frame, point_cloud_frame, frame_ts, frame_no
+        return (
+            color_frame,
+            depth_frame,
+            point_cloud_frame,
+            frame_ts,
+            frame_no,
+            timestamp_info,
+        )
 
     def run(self):
         ring = SharedFrameRingAccessor(self.ring_desc)
@@ -421,13 +577,27 @@ class SingleVisionProcess(mp.Process):
 
         try:
             while True:
-                color_frame, _, _, frame_ts, frame_no = self.get_vision()
-                t_host_ns = time.monotonic_ns()
+                color_frame, _, _, frame_ts, frame_no, timestamp_info = self.get_vision()
+                t_receive_host_ns = int(timestamp_info["wait_return_mono_ns"])
+                sensor_timestamp_us = timestamp_info["sensor_timestamp_us"]
+                frame_global_mono_ns = timestamp_info["frame_global_mono_ns"]
+                t_host_ns = (
+                    int(frame_global_mono_ns)
+                    if frame_global_mono_ns is not None
+                    else t_receive_host_ns
+                )
+                fit_residual_ms = float("nan")
+                receive_minus_image_ms = (t_receive_host_ns - int(t_host_ns)) / 1e6
                 ring.publish(
                     frame=color_frame,
                     t_host_ns=t_host_ns,
                     t_dev_ts=frame_ts,
                     frame_no=frame_no,
+                    t_receive_host_ns=t_receive_host_ns,
+                    sensor_timestamp_us=sensor_timestamp_us,
+                    frame_global_mono_ns=frame_global_mono_ns,
+                    timestamp_fit_residual_ms=fit_residual_ms,
+                    receive_minus_image_ms=receive_minus_image_ms,
                 )
         finally:
             ring.close()
@@ -638,7 +808,14 @@ class MultiRealSense:
                     "front_meta": {
                         "seq": front["seq"],
                         "t_host_ns": front["t_host_ns"],
+                        "t_receive_host_ns": front["t_receive_host_ns"],
                         "t_dev_ts": front["t_dev_ts"],
+                        "sensor_timestamp_us": front["sensor_timestamp_us"],
+                        "frame_global_mono_ns": front["frame_global_mono_ns"],
+                        "timestamp_fit_residual_ms": front[
+                            "timestamp_fit_residual_ms"
+                        ],
+                        "receive_minus_image_ms": front["receive_minus_image_ms"],
                         "frame_no": front["frame_no"],
                     },
                 }
@@ -663,7 +840,14 @@ class MultiRealSense:
                     "right_meta": {
                         "seq": right["seq"],
                         "t_host_ns": right["t_host_ns"],
+                        "t_receive_host_ns": right["t_receive_host_ns"],
                         "t_dev_ts": right["t_dev_ts"],
+                        "sensor_timestamp_us": right["sensor_timestamp_us"],
+                        "frame_global_mono_ns": right["frame_global_mono_ns"],
+                        "timestamp_fit_residual_ms": right[
+                            "timestamp_fit_residual_ms"
+                        ],
+                        "receive_minus_image_ms": right["receive_minus_image_ms"],
                         "frame_no": right["frame_no"],
                         "sync_delta_to_front_ms": right.get(
                             "sync_delta_to_target_ms"

@@ -9,8 +9,8 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "debug"
 
-horizon: 24
-n_action_steps: 24
+horizon: 28
+n_action_steps: 28
 
 n_obs_steps: 1
 n_latency_steps: 0

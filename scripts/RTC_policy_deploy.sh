@@ -1,19 +1,24 @@
+# Pure RTC policy deployment script.
+#
 # Examples:
-# RTC policy expert-intervention collection script.
-
-# bash scripts/RTC_expert_interve_collect.sh RTC_dp_224x224_r3m two-image 0310
-# bash scripts/RTC_expert_interve_collect.sh RTC_Recap Recap-image 0312
-# bash scripts/RTC_expert_interve_collect.sh RTC_sigRecap Recap-image 0507_task1_iter1
+# bash scripts/RTC_policy_deploy.sh RTC_dp_224x224_r3m two-image 0310
+# bash scripts/RTC_policy_deploy.sh RTC_Recap Recap-image 0312
+# bash scripts/RTC_policy_deploy.sh RTC_sigRecap Recap-image 0507_task1_iter1
 #
 # Optional diagnostics:
-# RTC_OBS_LATENCY_STEPS=1 bash scripts/RTC_expert_interve_collect.sh RTC_sigRecap Recap-image 0507_task1_iter1
-# RTC_POLICY_MAX_TASK_LENGTH=300 bash scripts/RTC_expert_interve_collect.sh RTC_sigRecap Recap-image 0507_task1_iter1
-# RTC_USE_POLICY_MPC=1 bash scripts/RTC_expert_interve_collect.sh RTC_sigRecap Recap-image 0507_task1_iter1
+# RTC_OBS_LATENCY_STEPS=1 bash scripts/RTC_policy_deploy.sh RTC_sigRecap Recap-image 0507_task1_iter1
+# RTC_POLICY_MAX_TASK_LENGTH=300 bash scripts/RTC_policy_deploy.sh RTC_sigRecap Recap-image 0507_task1_iter1
+# RTC_USE_POLICY_MPC=1 bash scripts/RTC_policy_deploy.sh RTC_sigRecap Recap-image 0507_task1_iter1
+
+set -e
+
+if [ "$#" -lt 3 ]; then
+    echo "Usage: bash scripts/RTC_policy_deploy.sh <alg_name> <task_name> <addition_info>"
+    exit 2
+fi
 
 wandb_mode=offline
-#dataset_path=/home/lrz/dp_data/train_data
 dataset_path=/home/lrz/dp_data/zarr_task1
-
 
 DEBUG=False
 save_ckpt=True
@@ -46,16 +51,18 @@ echo -e "\033[33mmax_latency_steps: ${max_latency_steps}\033[0m"
 echo -e "\033[33mRTC_OBS_LATENCY_STEPS: ${RTC_OBS_LATENCY_STEPS:-1}\033[0m"
 echo -e "\033[33mRTC_ACTION_OFFSET_STEPS: ${RTC_ACTION_OFFSET_STEPS:-dataset_attr_or_0}\033[0m"
 echo -e "\033[33mRTC_USE_POLICY_MPC: ${RTC_USE_POLICY_MPC}\033[0m"
-
+echo -e "\033[33mPolicy deploy: no H5 saving, no intervention.\033[0m"
 
 cd DexPIE
 
-sudo chmod 666 /dev/ttyUSB0
+if [ -e /dev/ttyUSB0 ]; then
+    sudo chmod 666 /dev/ttyUSB0 || true
+fi
 
-export HYDRA_FULL_ERROR=1 
+export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 
-python RTC_expert_interve_collect.py --config-name=${config_name}.yaml \
+python RTC_policy_deploy.py --config-name=${config_name}.yaml \
                             task=${task_name} \
                             hydra.run.dir=${run_dir} \
                             training.debug=$DEBUG \
@@ -64,4 +71,4 @@ python RTC_expert_interve_collect.py --config-name=${config_name}.yaml \
                             exp_name=${exp_name} \
                             logging.mode=${wandb_mode} \
                             checkpoint.save_ckpt=${save_ckpt} \
-                            task.dataset.zarr_path=$dataset_path 
+                            task.dataset.zarr_path=$dataset_path

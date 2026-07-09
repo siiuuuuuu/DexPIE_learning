@@ -5,11 +5,21 @@ import ray
 class RTCActionStream:
     """Maintains async RTC policy chunks and exposes only valid future actions."""
 
-    def __init__(self, policy_actor, tool, use_wrist_img=False, max_latency_step=3):
+    def __init__(
+        self,
+        policy_actor,
+        tool,
+        use_wrist_img=False,
+        max_latency_step=3,
+        obs_latency_steps=0,
+        action_offset_steps=0,
+    ):
         self.policy_actor = policy_actor
         self.tool = tool
         self.use_wrist_img = bool(use_wrist_img)
         self.max_latency_step = int(max_latency_step)
+        self.obs_latency_steps = max(0, int(obs_latency_steps))
+        self.action_offset_steps = max(0, int(action_offset_steps))
         self.reset()
 
     def reset(self):
@@ -22,20 +32,21 @@ class RTCActionStream:
         self.pending_ref = None
 
     def step(self, qpos, image, wrist_image, current_arm_mat):
-        """Advance the 25Hz RTC stream by one slot.
+        """Advance the policy-rate RTC stream by one slot.
 
-        The returned command is the current 25Hz slot for compatibility. When a
-        fresh policy chunk becomes available, command["valid_sequence"] contains
-        only future actions that are not RTC overlap/padding from the previous
-        chunk.
+        The returned command is the current slot for compatibility. When a fresh
+        policy chunk becomes available, command["valid_sequence"] contains only
+        future actions that are not RTC overlap/padding from the previous chunk.
         """
         obs = self._make_obs_dict(qpos, image, wrist_image, exc_action=None)
         valid_sequence = None
         if not self.initialized:
             self._initialize(obs, current_arm_mat)
+            valid_start, start_delay_steps = self._initial_alignment()
+            self.action_cursor = valid_start
             valid_sequence = self._make_valid_sequence(
-                valid_start=0,
-                start_delay_steps=0,
+                valid_start=valid_start,
+                start_delay_steps=start_delay_steps,
             )
 
         if self._should_prefetch():
@@ -72,10 +83,30 @@ class RTCActionStream:
         self.initialized = True
 
     def _should_prefetch(self):
+        prefetch_lead_steps = self._prefetch_lead_steps()
         return (
-            self.action_horizon > self.max_latency_step
-            and self.action_cursor == self.action_horizon - self.max_latency_step
+            self.action_horizon > prefetch_lead_steps
+            and self.action_cursor == self.action_horizon - prefetch_lead_steps
         )
+
+    def _prefetch_lead_steps(self):
+        return max(
+            1,
+            self.max_latency_step
+            - self.obs_latency_steps
+            + self.action_offset_steps,
+        )
+
+    def _initial_alignment(self):
+        if self.action_horizon <= 0:
+            return 0, 0
+
+        # action[k] is trained to mean image_anchor + action_offset_steps + k.
+        # Online execution starts about obs_latency_steps after image_anchor.
+        valid_start = max(0, self.obs_latency_steps - self.action_offset_steps)
+        valid_start = min(valid_start, self.action_horizon - 1)
+        start_delay_steps = max(0, self.action_offset_steps - self.obs_latency_steps)
+        return valid_start, start_delay_steps
 
     def _prefetch(self, obs_dict, current_arm_mat):
         self.policy_ref_mat = current_arm_mat

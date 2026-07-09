@@ -230,6 +230,18 @@ class TimmObsEncoder(ModuleAttrMixin):
             "number of parameters: %e", sum(p.numel() for p in self.parameters())
         )
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if getattr(self, "model_name", None) == "r3m":
+            seen = set()
+            for model in self.key_model_map.values():
+                model_id = id(model)
+                if model_id in seen:
+                    continue
+                seen.add(model_id)
+                model.eval()
+        return self
+
     def aggregate_feature(self, feature):
         if self.model_name == 'r3m':
             return feature
@@ -282,7 +294,10 @@ class TimmObsEncoder(ModuleAttrMixin):
                 # img shape: Bx3xHxW
                 # new size: Bx3xnHxnW
                 img = F.interpolate(img, size=(target_H, target_W), mode='bilinear', align_corners=False)
-            img = self.key_transform_map[key](img)
+            # Random image augmentation is train-only; deploy/eval should see
+            # deterministic resized camera frames.
+            if self.training:
+                img = self.key_transform_map[key](img)
             img_list.append(img)
         key = self.rgb_keys[0]# Use the first key's model for shared encoding.
         img = torch.cat(img_list, dim=0) # Run all images through the model in parallel.

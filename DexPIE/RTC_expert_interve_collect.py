@@ -7,6 +7,7 @@ sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 import os
 import time
 import pathlib
+import json
 from datetime import datetime
 
 import hydra
@@ -46,7 +47,7 @@ DEFAULT_WORKSPACE_LIMITS = {
     "y": [-1.5, 1.5],
     "z": [-0.5, 1.5],
 }
-DEFAULT_INITIAL_POSE = [0.248, 0.0812, 0.3978, 1.16, 1.25, 1.28]
+DEFAULT_INITIAL_POSE = [0.248, 0.1212, 0.3978, 1.16, 1.25, 1.28]
 DEFAULT_HAND_PORT = "/dev/ttyUSB0"
 DEFAULT_HAND_BAUDRATE = 115200
 DEFAULT_HAND_RESET_COMMAND = [1000, 1000, 1000, 1000, 1000, 1000]
@@ -56,7 +57,7 @@ DEFAULT_HAND_INTERVENTION_Z = 0.8  # Damping ratio; larger values reduce oversho
 DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task3_iter1"
 DEFAULT_CONTROL_DT = 1.0 / 30.0
 DEFAULT_IMAGE_SIZE = 256
-DEFAULT_MAX_TASK_LENGTH = 1000  # Max task length used to normalize reward calculation.
+DEFAULT_MAX_TASK_LENGTH = 4000  # Max task length used to normalize reward calculation.
 DEFAULT_ROBOT_STATE_FREQUENCY = 125.0
 DEFAULT_ARM_SERVO_FREQUENCY = 60
 DEFAULT_TRACKER_FREQUENCY = 60.0
@@ -67,7 +68,11 @@ DEFAULT_FRONT_CAMERA_FPS = 30
 DEFAULT_WRIST_CAMERA_FPS = 60
 DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
 DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 5.0
-DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 3.0
+DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 5.0
+DEFAULT_RTC_OBS_LATENCY_STEPS = 1
+DEFAULT_POLICY_ROT_MAX_SPEED_DEG = 75.0
+DEFAULT_POLICY_ROT_MAX_GAP_DEG = 10.0
+DEFAULT_POLICY_STATE_TIMEOUT = 0.12
 
 
 @ray.remote(num_gpus=1)
@@ -91,6 +96,35 @@ class async_policy:
         return action.detach().cpu()
 
 
+def env_int(name, default):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return int(default)
+    return int(value)
+
+
+def env_float(name, default):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return float(default)
+    return float(value)
+
+
+def dataset_action_offset_steps(cfg, default=0):
+    zarr_path = OmegaConf.select(cfg, "task.dataset.zarr_path")
+    if zarr_path is None:
+        return int(default)
+    attrs_path = pathlib.Path(str(zarr_path)).expanduser().joinpath(".zattrs")
+    if not attrs_path.is_file():
+        return int(default)
+    try:
+        with attrs_path.open("r", encoding="utf-8") as f:
+            attrs = json.load(f)
+        return int(attrs.get("action_offset_frames", default))
+    except Exception:
+        return int(default)
+
+
 @hydra.main(
     config_path=str(pathlib.Path(__file__).parent.joinpath(
         'dexpie', 'config'))
@@ -107,6 +141,18 @@ def main(cfg: OmegaConf):
     use_image = True
     use_wrist_img = bool(cfg.task.dataset.use_wrist_img)
     tools = MATHTOOLS()
+    dt = env_float("RTC_POLICY_DT", DEFAULT_CONTROL_DT)
+    max_task_length = env_int("RTC_POLICY_MAX_TASK_LENGTH", DEFAULT_MAX_TASK_LENGTH)
+    obs_latency_steps = env_int(
+        "RTC_OBS_LATENCY_STEPS",
+        DEFAULT_RTC_OBS_LATENCY_STEPS,
+    )
+    action_offset_steps = env_int(
+        "RTC_ACTION_OFFSET_STEPS",
+        dataset_action_offset_steps(cfg, default=0),
+    )
+    initial_valid_start = max(0, obs_latency_steps - action_offset_steps)
+    initial_start_delay_steps = max(0, action_offset_steps - obs_latency_steps)
 
     # Initialize expert process.
     expert = ExpertIntervention(use_right_hand=True, use_left_hand=False)
@@ -136,11 +182,26 @@ def main(cfg: OmegaConf):
         tools,
         use_wrist_img=use_wrist_img,
         max_latency_step=max_latency_step,
+        obs_latency_steps=obs_latency_steps,
+        action_offset_steps=action_offset_steps,
     )
+    cprint(
+        f"RTC max_latency_steps={max_latency_step}, "
+        f"obs_latency_steps={obs_latency_steps}, "
+        f"action_offset_steps={action_offset_steps}, "
+        f"dt={dt:.4f}s",
+        "yellow",
+    )
+    cprint(
+        "RTC action alignment: "
+        f"initial_valid_start={initial_valid_start}, "
+        f"initial_start_delay_steps={initial_start_delay_steps}",
+        "yellow",
+    )
+    cprint("Policy arm execution uses direct interpolation.", "yellow")
     data_dir = os.path.expanduser(DEFAULT_DATA_DIR)
     os.makedirs(data_dir, exist_ok=True)
 
-    dt = DEFAULT_CONTROL_DT
     img_size = DEFAULT_IMAGE_SIZE
     first_init = True
 
@@ -161,6 +222,7 @@ def main(cfg: OmegaConf):
         servo_dt=1.0 / DEFAULT_ARM_SERVO_FREQUENCY,
         lookahead_time=0.2,
         gain=500,
+        control_frequency=DEFAULT_ARM_SERVO_FREQUENCY,
     )
     print("robot connected")
     hand_controller = InspireHandController(DEFAULT_HAND_PORT, DEFAULT_HAND_BAUDRATE)
@@ -193,6 +255,12 @@ def main(cfg: OmegaConf):
         servo_frequency=DEFAULT_ARM_SERVO_FREQUENCY,
         tracker_frequency=DEFAULT_TRACKER_FREQUENCY,
         policy_frequency=1.0 / dt,
+        policy_interpolation_delay=0.0,
+        robot_state_reader=robot_state_reader,
+        use_policy_mpc=False,
+        policy_rot_max_speed_deg=DEFAULT_POLICY_ROT_MAX_SPEED_DEG,
+        policy_rot_max_gap_deg=DEFAULT_POLICY_ROT_MAX_GAP_DEG,
+        policy_state_timeout=DEFAULT_POLICY_STATE_TIMEOUT,
     )
     obs_builder = ObservationBuilder(
         camera,
@@ -242,14 +310,13 @@ def main(cfg: OmegaConf):
         print(
             "Arm executor started "
             f"({DEFAULT_ARM_SERVO_FREQUENCY:.1f}Hz servo, "
-            f"{DEFAULT_TRACKER_FREQUENCY:.1f}Hz tracker)."
+            f"{DEFAULT_TRACKER_FREQUENCY:.1f}Hz tracker, "
+            "direct interpolation)."
         )
         print(
             "Human hand updater started "
             f"({DEFAULT_HUMAN_HAND_UPDATE_FREQUENCY:.1f}Hz)."
         )
-
-    max_task_length = DEFAULT_MAX_TASK_LENGTH
 
     try:
         while not keyboard_control.should_stop_collection():

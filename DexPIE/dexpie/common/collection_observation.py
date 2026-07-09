@@ -96,13 +96,43 @@ class ObservationBuilder:
                 "t_camera_read_ns": t_camera_read_ns,
                 "t_anchor_ns": anchor_ns,
                 "t_front_camera_host_ns": front_meta.get("t_host_ns"),
+                "t_front_camera_receive_host_ns": front_meta.get(
+                    "t_receive_host_ns"
+                ),
                 "front_camera_seq": front_meta.get("seq"),
                 "front_camera_frame_no": front_meta.get("frame_no"),
                 "front_camera_dev_ts": front_meta.get("t_dev_ts"),
+                "front_camera_sensor_timestamp_us": front_meta.get(
+                    "sensor_timestamp_us"
+                ),
+                "front_camera_frame_global_mono_ns": front_meta.get(
+                    "frame_global_mono_ns"
+                ),
+                "front_camera_timestamp_fit_residual_ms": front_meta.get(
+                    "timestamp_fit_residual_ms"
+                ),
+                "front_camera_receive_minus_image_ms": front_meta.get(
+                    "receive_minus_image_ms"
+                ),
                 "t_wrist_camera_host_ns": wrist_meta.get("t_host_ns"),
+                "t_wrist_camera_receive_host_ns": wrist_meta.get(
+                    "t_receive_host_ns"
+                ),
                 "wrist_camera_seq": wrist_meta.get("seq"),
                 "wrist_camera_frame_no": wrist_meta.get("frame_no"),
                 "wrist_camera_dev_ts": wrist_meta.get("t_dev_ts"),
+                "wrist_camera_sensor_timestamp_us": wrist_meta.get(
+                    "sensor_timestamp_us"
+                ),
+                "wrist_camera_frame_global_mono_ns": wrist_meta.get(
+                    "frame_global_mono_ns"
+                ),
+                "wrist_camera_timestamp_fit_residual_ms": wrist_meta.get(
+                    "timestamp_fit_residual_ms"
+                ),
+                "wrist_camera_receive_minus_image_ms": wrist_meta.get(
+                    "receive_minus_image_ms"
+                ),
                 "t_robot_obs_host_ns": robot_obs_ns,
                 "t_aligned_robot_obs_ns": robot_obs_ns,
                 "sync_delta_robot_obs_ms": robot_delta_ms,

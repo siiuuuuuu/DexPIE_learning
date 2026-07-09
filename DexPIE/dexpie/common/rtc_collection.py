@@ -78,20 +78,38 @@ class RTCTimestampBuilder:
             "t_tracker1_host_ns",
             "t_tracker_latest_host_ns",
             "arm_executor_mode",
+            "mpc_enabled",
+            "mpc_status",
+            "mpc_iterations",
+            "mpc_horizon",
         )
         for key in int_keys:
             if key in arm_motion:
                 timestamps[key] = scalar_value(arm_motion[key])
 
-        if "interpolation_alpha" in arm_motion:
-            timestamps["interpolation_alpha"] = scalar_value(
-                arm_motion["interpolation_alpha"]
-            )
+        float_keys = (
+            "interpolation_alpha",
+            "mpc_cost",
+            "mpc_runtime_ms",
+            "mpc_tau",
+            "mpc_state_age_ms",
+            "mpc_tracking_error_cm",
+            "mpc_command_gap_cm",
+            "mpc_raw_command_gap_cm",
+            "mpc_reference_gap_cm",
+        )
+        for key in float_keys:
+            if key in arm_motion:
+                timestamps[key] = scalar_value(arm_motion[key])
 
         action_ns = timestamps.get("t_arm_action_host_ns")
         timestamps["t_aligned_arm_action_ns"] = action_ns
         timestamps["sync_delta_arm_action_ms"] = time_delta_ms(
             action_ns,
+            timestamps.get("t_anchor_ns"),
+        )
+        timestamps["sync_delta_arm_servo_ms"] = time_delta_ms(
+            timestamps.get("t_arm_servo_host_ns"),
             timestamps.get("t_anchor_ns"),
         )
 

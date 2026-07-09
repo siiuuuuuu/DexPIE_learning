@@ -21,6 +21,7 @@ class URArmInterface:
         servo_dt=0.02,
         lookahead_time=0.2,
         gain=500,
+        control_frequency=None,
     ):
         self.host = host
         self.workspace_limits = workspace_limits
@@ -29,13 +30,24 @@ class URArmInterface:
         self.servo_dt = servo_dt
         self.lookahead_time = lookahead_time
         self.gain = gain
+        self.control_frequency = (
+            None if control_frequency is None else float(control_frequency)
+        )
+        if self.control_frequency is not None and self.control_frequency <= 0:
+            raise ValueError("control_frequency must be positive")
         self.rtde_c = None
         self.rtde_r = None
         self.connect()
 
     def connect(self):
         try:
-            self.rtde_c = rtde_control.RTDEControlInterface(self.host)
+            if self.control_frequency is None:
+                self.rtde_c = rtde_control.RTDEControlInterface(self.host)
+            else:
+                self.rtde_c = rtde_control.RTDEControlInterface(
+                    self.host,
+                    self.control_frequency,
+                )
             self.rtde_r = rtde_receive.RTDEReceiveInterface(self.host)
             print("RTDE connected")
         except Exception as e:
