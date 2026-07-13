@@ -45,22 +45,20 @@ DEFAULT_HAND_PORT = "/dev/ttyUSB0"
 DEFAULT_HAND_BAUDRATE = 115200
 DEFAULT_HAND_RESET_COMMAND = [1000, 1000, 1000, 1000, 1000, 1000]
 DEFAULT_HAND_EXECUTOR_HZ = 120.0
-DEFAULT_HAND_INTERVENTION_W = 25.0
-DEFAULT_HAND_INTERVENTION_Z = 0.8
+DEFAULT_HAND_INTERVENTION_W = 30.0
+DEFAULT_HAND_INTERVENTION_Z = 0.85
+DEFAULT_HAND_INTERVENTION_INPUT_ALPHA = 0.84
 DEFAULT_CONTROL_DT = 1.0 / 30.0
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_MAX_TASK_LENGTH = 1000
 DEFAULT_ROBOT_STATE_FREQUENCY = 125.0
 DEFAULT_ARM_SERVO_FREQUENCY = 120
-DEFAULT_ALIGNMENT_TOLERANCE_MS = 25.0
+DEFAULT_ALIGNMENT_TOLERANCE_MS = 15.0
 DEFAULT_FRONT_CAMERA_FPS = 30
 DEFAULT_WRIST_CAMERA_FPS = 60
 DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
 DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 5.0
 DEFAULT_RTC_OBS_LATENCY_STEPS = 1
-DEFAULT_POLICY_STATE_TIMEOUT = 0.12
-DEFAULT_POLICY_ROT_MAX_SPEED_DEG = 75.0
-DEFAULT_POLICY_ROT_MAX_GAP_DEG = 10.0
 DEFAULT_DIAG_INTERVAL_STEPS = 30
 
 
@@ -347,6 +345,7 @@ def main(cfg: OmegaConf):
             w=DEFAULT_HAND_INTERVENTION_W,
             z=DEFAULT_HAND_INTERVENTION_Z,
             dim=len(DEFAULT_HAND_RESET_COMMAND),
+            input_alpha=DEFAULT_HAND_INTERVENTION_INPUT_ALPHA,
         )
         print("hand_controller connected")
         robot_state_reader = HighRateRobotStateReader(
@@ -360,11 +359,6 @@ def main(cfg: OmegaConf):
             servo_frequency=DEFAULT_ARM_SERVO_FREQUENCY,
             policy_frequency=1.0 / dt,
             policy_interpolation_delay=0.0,
-            robot_state_reader=robot_state_reader,
-            use_policy_mpc=False,
-            policy_rot_max_speed_deg=DEFAULT_POLICY_ROT_MAX_SPEED_DEG,
-            policy_rot_max_gap_deg=DEFAULT_POLICY_ROT_MAX_GAP_DEG,
-            policy_state_timeout=DEFAULT_POLICY_STATE_TIMEOUT,
         )
         obs_builder = ObservationBuilder(
             camera,

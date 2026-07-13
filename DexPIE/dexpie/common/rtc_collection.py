@@ -78,10 +78,6 @@ class RTCTimestampBuilder:
             "t_tracker1_host_ns",
             "t_tracker_latest_host_ns",
             "arm_executor_mode",
-            "mpc_enabled",
-            "mpc_status",
-            "mpc_iterations",
-            "mpc_horizon",
         )
         for key in int_keys:
             if key in arm_motion:
@@ -89,14 +85,6 @@ class RTCTimestampBuilder:
 
         float_keys = (
             "interpolation_alpha",
-            "mpc_cost",
-            "mpc_runtime_ms",
-            "mpc_tau",
-            "mpc_state_age_ms",
-            "mpc_tracking_error_cm",
-            "mpc_command_gap_cm",
-            "mpc_raw_command_gap_cm",
-            "mpc_reference_gap_cm",
         )
         for key in float_keys:
             if key in arm_motion:

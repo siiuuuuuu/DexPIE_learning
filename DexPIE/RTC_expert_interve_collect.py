@@ -52,27 +52,25 @@ DEFAULT_HAND_PORT = "/dev/ttyUSB0"
 DEFAULT_HAND_BAUDRATE = 115200
 DEFAULT_HAND_RESET_COMMAND = [1000, 1000, 1000, 1000, 1000, 1000]
 DEFAULT_HAND_EXECUTOR_HZ = 120.0
-DEFAULT_HAND_INTERVENTION_W = 25.0  # Natural frequency; larger values track targets faster.
-DEFAULT_HAND_INTERVENTION_Z = 0.8  # Damping ratio; larger values reduce overshoot and smooth motion.
-DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task3_iter1"
+DEFAULT_HAND_INTERVENTION_W = 30.0  # Natural frequency; larger values track targets faster.
+DEFAULT_HAND_INTERVENTION_Z = 0.85  # Damping ratio; larger values reduce overshoot and smooth motion.
+DEFAULT_HAND_INTERVENTION_INPUT_ALPHA = 0.84
+DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task4_iter1"
 DEFAULT_CONTROL_DT = 1.0 / 30.0
 DEFAULT_IMAGE_SIZE = 256
-DEFAULT_MAX_TASK_LENGTH = 4000  # Max task length used to normalize reward calculation.
+DEFAULT_MAX_TASK_LENGTH = 1000  # Max task length used to normalize reward calculation.
 DEFAULT_ROBOT_STATE_FREQUENCY = 125.0
-DEFAULT_ARM_SERVO_FREQUENCY = 60
-DEFAULT_TRACKER_FREQUENCY = 60.0
+DEFAULT_ARM_SERVO_FREQUENCY = 120
+DEFAULT_TRACKER_FREQUENCY = 80.0
 DEFAULT_MANUS_TIMEOUT = 0.25
 DEFAULT_HUMAN_HAND_UPDATE_FREQUENCY = 120.0
-DEFAULT_ALIGNMENT_TOLERANCE_MS = 25.0
+DEFAULT_ALIGNMENT_TOLERANCE_MS = 15.0
 DEFAULT_FRONT_CAMERA_FPS = 30
 DEFAULT_WRIST_CAMERA_FPS = 60
 DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
 DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 5.0
 DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 5.0
-DEFAULT_RTC_OBS_LATENCY_STEPS = 1
-DEFAULT_POLICY_ROT_MAX_SPEED_DEG = 75.0
-DEFAULT_POLICY_ROT_MAX_GAP_DEG = 10.0
-DEFAULT_POLICY_STATE_TIMEOUT = 0.12
+DEFAULT_RTC_OBS_LATENCY_STEPS = 1 #测出来是有个读出延迟为一帧,曝光延迟不知道有没有，至少挺小的，不到一帧
 
 
 @ray.remote(num_gpus=1)
@@ -232,6 +230,7 @@ def main(cfg: OmegaConf):
         w=DEFAULT_HAND_INTERVENTION_W,
         z=DEFAULT_HAND_INTERVENTION_Z,
         dim=len(DEFAULT_HAND_RESET_COMMAND),
+        input_alpha=DEFAULT_HAND_INTERVENTION_INPUT_ALPHA,
     )
     hand_updater = HumanHandUpdater(
         sample_reader=expert.latest_hand_sample,
@@ -256,11 +255,6 @@ def main(cfg: OmegaConf):
         tracker_frequency=DEFAULT_TRACKER_FREQUENCY,
         policy_frequency=1.0 / dt,
         policy_interpolation_delay=0.0,
-        robot_state_reader=robot_state_reader,
-        use_policy_mpc=False,
-        policy_rot_max_speed_deg=DEFAULT_POLICY_ROT_MAX_SPEED_DEG,
-        policy_rot_max_gap_deg=DEFAULT_POLICY_ROT_MAX_GAP_DEG,
-        policy_state_timeout=DEFAULT_POLICY_STATE_TIMEOUT,
     )
     obs_builder = ObservationBuilder(
         camera,

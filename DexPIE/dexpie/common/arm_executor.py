@@ -8,7 +8,6 @@ from collections import deque
 import numpy as np
 
 from dexpie.common.intervention_pose_processor import InterventionPoseProcessor
-from dexpie.common.task_space_mpc import TaskSpaceMPCConfig, TaskSpaceMPCTracker
 
 
 ARM_MODE_IDLE = 0
@@ -25,45 +24,23 @@ class HighRateArmExecutor:
         tool,
         tracker_reader=None,
         servo_frequency=120.0,
-        tracker_frequency=60.0,
-        policy_frequency=25.0,
+        tracker_frequency=80.0,
+        policy_frequency=30.0,
         tracker_timeout=0.25,
         policy_timeout=0.5,
         tracker_interpolation_delay=None,
         policy_interpolation_delay=None,
-        action_history_size=128,
-        robot_state_reader=None,
-        use_policy_mpc=True,
-        policy_mpc_horizon=15,
-        policy_mpc_tau=0.18,
-        policy_mpc_iterations=24,
-        policy_mpc_w_track=10.0,
-        policy_mpc_track_decay=1.0,
-        policy_mpc_w_cmd=0.0,
-        policy_mpc_w_yx=0.0,
-        policy_mpc_w_dy=0.0,
-        policy_mpc_w_ddy=20.0,
-        policy_mpc_max_cmd_actual_gap=0.0,
-        policy_mpc_max_velocity=0.5,
-        policy_mpc_max_acceleration=6.0,
-        policy_rot_max_speed_deg=75.0,
-        policy_rot_max_gap_deg=10.0,
-        policy_state_timeout=0.12,
+        action_history_size=48,
     ):
         self.robot = robot
         self.tool = tool
         self.tracker_reader = tracker_reader
-        self.robot_state_reader = robot_state_reader
         self.servo_frequency = float(servo_frequency)
         self.tracker_frequency = float(tracker_frequency)
         self.policy_frequency = float(policy_frequency)
         self.tracker_timeout = float(tracker_timeout)
         self.policy_timeout = float(policy_timeout)
         self.action_history_size = int(action_history_size)
-        self.use_policy_mpc = bool(use_policy_mpc)
-        self.policy_rot_max_speed_deg = float(policy_rot_max_speed_deg)
-        self.policy_rot_max_gap_deg = float(policy_rot_max_gap_deg)
-        self.policy_state_timeout = float(policy_state_timeout)
 
         if self.servo_frequency <= 0:
             raise ValueError("servo_frequency must be positive")
@@ -99,25 +76,6 @@ class HighRateArmExecutor:
         self._latest_tracker_time_ns = None
         self._intervention_reference_arm_mat = None
         self._pose_processor = InterventionPoseProcessor(tool)
-        self._policy_mpc = TaskSpaceMPCTracker(
-            TaskSpaceMPCConfig(
-                horizon=int(policy_mpc_horizon),
-                tau=float(policy_mpc_tau),
-                iterations=int(policy_mpc_iterations),
-                w_track=float(policy_mpc_w_track),
-                track_decay=float(policy_mpc_track_decay),
-                w_cmd=float(policy_mpc_w_cmd),
-                w_yx=float(policy_mpc_w_yx),
-                w_dy=float(policy_mpc_w_dy),
-                w_ddy=float(policy_mpc_w_ddy),
-                max_cmd_actual_gap=float(policy_mpc_max_cmd_actual_gap),
-                max_velocity=float(policy_mpc_max_velocity),
-                max_acceleration=float(policy_mpc_max_acceleration),
-            ),
-            dt=1.0 / self.servo_frequency,
-            workspace_limits=getattr(robot, "workspace_limits", None),
-        )
-        self._last_policy_command_mat = None
         self._error = None
         self._threads = []
 
@@ -163,14 +121,12 @@ class HighRateArmExecutor:
             self._latest_tracker_time_ns = None
         self._pose_processor.clear_reference()
         self._intervention_reference_arm_mat = None
-        self._reset_policy_tracker()
 
     def start_policy(self):
         with self._mode_lock:
             self._mode = ARM_MODE_POLICY
         with self._motion_lock:
             self._policy_samples.clear()
-        self._reset_policy_tracker()
         self._target_ready.clear()
 
     def start_intervention(self, reference_arm_mat):
@@ -413,156 +369,8 @@ class HighRateArmExecutor:
                 f"{self.policy_timeout:.3f}s)"
             )
 
-        if self.use_policy_mpc:
-            return self._policy_mpc_motion(samples, now)
-
         target_time = now - self.policy_interpolation_delay
         return self._motion_at(samples, target_time, "t_policy_command_host_ns")
-
-    def _policy_mpc_motion(self, samples, now):
-        period = 1.0 / self.servo_frequency
-        horizon = int(self._policy_mpc.config.horizon)
-        target_time = now - self.policy_interpolation_delay
-        references = [
-            self._motion_at(
-                samples,
-                target_time + index * period,
-                "t_policy_command_host_ns",
-            )
-            for index in range(max(1, horizon))
-        ]
-        pre_motion = references[0]
-        ref_positions = np.asarray(
-            [motion["result_matrix"][:3, 3] for motion in references],
-            dtype=np.float64,
-        )
-        now_ns = time.monotonic_ns()
-        actual_pose, actual_mat, state_age_ms = self._latest_actual_tcp(now_ns)
-        if actual_pose is None:
-            if self._last_policy_command_mat is not None:
-                actual_xyz = self._last_policy_command_mat[:3, 3]
-                actual_rot = self._last_policy_command_mat[:3, :3]
-            else:
-                actual_xyz = ref_positions[0]
-                actual_rot = pre_motion["result_matrix"][:3, :3]
-        else:
-            actual_xyz = actual_pose[:3]
-            actual_rot = actual_mat[:3, :3]
-
-        mpc_start_ns = time.perf_counter_ns()
-        mpc_result = self._policy_mpc.plan(ref_positions, actual_xyz)
-        mpc_runtime_ms = (time.perf_counter_ns() - mpc_start_ns) / 1e6
-        command_mat = np.asarray(pre_motion["result_matrix"], dtype=np.float64).copy()
-        command_mat[:3, 3] = mpc_result.command
-        command_mat[:3, :3] = self._policy_command_rotation(
-            pre_motion["result_matrix"][:3, :3],
-            actual_rot,
-        )
-        self._last_policy_command_mat = command_mat.copy()
-
-        motion = self._copy_motion(pre_motion)
-        motion["servo_target_arm_mat"] = command_mat
-        motion["servo_target_pose"] = np.asarray(self.tool.mat2xyz_rotvec(command_mat))
-        motion["servo_arm_action"] = np.asarray(self.tool.mat2xyz_6drot(command_mat))
-        motion["mpc_enabled"] = np.asarray(1, dtype=np.int64)
-        motion["mpc_status"] = np.asarray(mpc_result.status, dtype=np.int64)
-        motion["mpc_iterations"] = np.asarray(mpc_result.iterations, dtype=np.int64)
-        motion["mpc_horizon"] = np.asarray(horizon, dtype=np.int64)
-        motion["mpc_cost"] = np.asarray(mpc_result.cost, dtype=np.float64)
-        motion["mpc_runtime_ms"] = np.asarray(mpc_runtime_ms, dtype=np.float64)
-        motion["mpc_tau"] = np.asarray(
-            self._policy_mpc.config.tau,
-            dtype=np.float64,
-        )
-        motion["mpc_state_age_ms"] = np.asarray(
-            np.nan if state_age_ms is None else state_age_ms,
-            dtype=np.float64,
-        )
-        motion["mpc_tracking_error_cm"] = np.asarray(
-            mpc_result.tracking_error * 100.0,
-            dtype=np.float64,
-        )
-        motion["mpc_command_gap_cm"] = np.asarray(
-            mpc_result.command_gap * 100.0,
-            dtype=np.float64,
-        )
-        motion["mpc_raw_command_gap_cm"] = np.asarray(
-            mpc_result.raw_command_gap * 100.0,
-            dtype=np.float64,
-        )
-        motion["mpc_reference_gap_cm"] = np.asarray(
-            mpc_result.reference_gap * 100.0,
-            dtype=np.float64,
-        )
-        return motion
-
-    def _latest_actual_tcp(self, now_ns):
-        if self.robot_state_reader is None:
-            return None, None, None
-        obs = self.robot_state_reader.latest_obs()
-        if obs is None or "tcp_pose" not in obs:
-            return None, None, None
-        obs_ns = obs.get("t_robot_obs_host_ns")
-        age_ms = None
-        if obs_ns is not None:
-            age_ms = (int(now_ns) - int(obs_ns)) / 1e6
-            if age_ms > self.policy_state_timeout * 1000.0:
-                return None, None, age_ms
-        pose = np.asarray(obs["tcp_pose"], dtype=np.float64).copy()
-        return pose, self.tool.xyz_rotvec_to_mat(pose), age_ms
-
-    def _policy_command_rotation(self, reference_rot, actual_rot):
-        reference_rot = self._project_rotation(reference_rot)
-        actual_rot = self._project_rotation(actual_rot)
-        if self._last_policy_command_mat is None:
-            base_rot = actual_rot
-        else:
-            base_rot = self._last_policy_command_mat[:3, :3]
-        max_step = (
-            math.radians(max(0.0, self.policy_rot_max_speed_deg))
-            / self.servo_frequency
-        )
-        command_rot = self._step_rotation(base_rot, reference_rot, max_step)
-        max_gap = math.radians(max(0.0, self.policy_rot_max_gap_deg))
-        return self._limit_rotation_gap(actual_rot, command_rot, max_gap)
-
-    def _reset_policy_tracker(self):
-        self._policy_mpc.reset()
-        self._last_policy_command_mat = None
-
-    @classmethod
-    def _step_rotation(cls, from_rot, to_rot, max_angle):
-        from_rot = cls._project_rotation(from_rot)
-        to_rot = cls._project_rotation(to_rot)
-        delta = cls._project_rotation(np.dot(from_rot.T, to_rot))
-        delta_rotvec = cls._rotmat_to_rotvec(delta)
-        angle = np.linalg.norm(delta_rotvec)
-        if angle <= max_angle or angle <= 1e-9:
-            return to_rot
-        return cls._project_rotation(
-            np.dot(
-                from_rot,
-                cls._rotvec_to_rotmat(delta_rotvec * (max_angle / angle)),
-            )
-        )
-
-    @classmethod
-    def _limit_rotation_gap(cls, actual_rot, command_rot, max_angle):
-        if max_angle <= 0.0:
-            return command_rot
-        actual_rot = cls._project_rotation(actual_rot)
-        command_rot = cls._project_rotation(command_rot)
-        delta = cls._project_rotation(np.dot(actual_rot.T, command_rot))
-        delta_rotvec = cls._rotmat_to_rotvec(delta)
-        angle = np.linalg.norm(delta_rotvec)
-        if angle <= max_angle or angle <= 1e-9:
-            return command_rot
-        return cls._project_rotation(
-            np.dot(
-                actual_rot,
-                cls._rotvec_to_rotmat(delta_rotvec * (max_angle / angle)),
-            )
-        )
 
     def _intervention_motion(self, now):
         with self._motion_lock:

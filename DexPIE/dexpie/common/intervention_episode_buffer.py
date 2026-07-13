@@ -44,10 +44,6 @@ TIMESTAMP_INT_KEYS = (
     "t_tracker1_host_ns",
     "t_tracker_latest_host_ns",
     "arm_executor_mode",
-    "mpc_enabled",
-    "mpc_status",
-    "mpc_iterations",
-    "mpc_horizon",
 )
 
 TIMESTAMP_FLOAT_KEYS = (
@@ -67,14 +63,6 @@ TIMESTAMP_FLOAT_KEYS = (
     "obs_to_action_latency_ms",
     "record_loop_duration_ms",
     "interpolation_alpha",
-    "mpc_cost",
-    "mpc_runtime_ms",
-    "mpc_tau",
-    "mpc_state_age_ms",
-    "mpc_tracking_error_cm",
-    "mpc_command_gap_cm",
-    "mpc_raw_command_gap_cm",
-    "mpc_reference_gap_cm",
 )
 
 

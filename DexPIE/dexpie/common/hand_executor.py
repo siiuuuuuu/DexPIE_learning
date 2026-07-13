@@ -20,13 +20,13 @@ class HighRateHandExecutor:
         self,
         send_callback,
         hz=120.0,
-        w=25.0,
-        z=0.8,
+        w=30.0,
+        z=0.85,
         dim=6,
         data_timeout=0.5,
         command_history_size=128,
         policy_schedule_size=64,
-        input_alpha=0.6,
+        input_alpha=0.84,
     ):
         self.send_callback = send_callback
         self.hz = float(hz)
@@ -34,9 +34,15 @@ class HighRateHandExecutor:
         self.command_history_size = int(command_history_size)
         self.policy_schedule_size = int(policy_schedule_size)
         self.input_alpha = float(input_alpha)
+        natural_frequency = float(w)
+        damping_ratio = float(z)
 
         if self.hz <= 0:
             raise ValueError("hz must be positive")
+        if natural_frequency <= 0:
+            raise ValueError("w must be positive")
+        if damping_ratio <= 0:
+            raise ValueError("z must be positive")
         if self.dim <= 0:
             raise ValueError("dim must be positive")
         if self.command_history_size <= 0:
@@ -46,8 +52,18 @@ class HighRateHandExecutor:
         if not 0 < self.input_alpha <= 1:
             raise ValueError("input_alpha must be in the range (0, 1]")
 
-        self.k_p = float(w) * float(w)
-        self.k_d = 2.0 * float(z) * float(w)
+        normalized_frequency = natural_frequency / self.hz
+        stability_margin = (
+            normalized_frequency * normalized_frequency
+            + 4.0 * damping_ratio * normalized_frequency
+        )
+        if stability_margin >= 4.0:
+            raise ValueError(
+                "unstable smoother configuration; increase hz or reduce w"
+            )
+
+        self.k_p = natural_frequency * natural_frequency
+        self.k_d = 2.0 * damping_ratio * natural_frequency
 
         self.current_angles = np.zeros(self.dim, dtype=np.float32)
         self.current_velocity = np.zeros(self.dim, dtype=np.float32)
@@ -414,7 +430,13 @@ class HighRateHandExecutor:
         accel = self.k_p * error - self.k_d * self.current_velocity
         self.current_velocity += accel * dt
         self.current_angles += self.current_velocity * dt
-        self.current_angles = np.clip(self.current_angles, 0, 1000)
+        clipped_angles = np.clip(self.current_angles, 0, 1000)
+        outward_velocity = (
+            ((clipped_angles <= 0) & (self.current_velocity < 0))
+            | ((clipped_angles >= 1000) & (self.current_velocity > 0))
+        )
+        self.current_velocity[outward_velocity] = 0.0
+        self.current_angles = clipped_angles
         return (
             self.current_angles.copy(),
             self.last_update_time_ns,
