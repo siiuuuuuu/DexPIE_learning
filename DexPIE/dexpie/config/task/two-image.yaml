@@ -23,6 +23,7 @@ shape_meta: &shape_meta # Reusable full shape metadata, including obs and action
 dataset:
   _target_: dexpie.dataset.dp_dataset_image.DPDatasetImage
   zarr_path: data/box_zarr
+  storage_mode: auto
   horizon: ${horizon}
   n_obs_steps: ${n_obs_steps}
   n_action_steps: ${n_action_steps}

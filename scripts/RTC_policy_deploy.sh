@@ -42,14 +42,13 @@ horizon=$(awk -F: '/^horizon:/ {gsub(/#.*/, "", $2); gsub(/[[:space:]]/, "", $2)
 n_action_steps=$(awk -F: '/^n_action_steps:/ {gsub(/#.*/, "", $2); gsub(/[[:space:]]/, "", $2); print $2; exit}' "${config_file}")
 max_latency_steps=$(awk -F: '/^[[:space:]]+max_latency_steps:/ {gsub(/#.*/, "", $2); gsub(/[[:space:]]/, "", $2); print $2; exit}' "${config_file}")
 
-export RTC_USE_POLICY_MPC=${RTC_USE_POLICY_MPC:-0}
 
 echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"
 echo -e "\033[33mconfig: ${config_name}, ckpt run: ${run_dir}\033[0m"
 echo -e "\033[33mhorizon: ${horizon}, n_action_steps: ${n_action_steps}\033[0m"
 echo -e "\033[33mmax_latency_steps: ${max_latency_steps}\033[0m"
 echo -e "\033[33mRTC_OBS_LATENCY_STEPS: ${RTC_OBS_LATENCY_STEPS:-1}\033[0m"
-echo -e "\033[33mRTC_ACTION_OFFSET_STEPS: ${RTC_ACTION_OFFSET_STEPS:-dataset_attr_or_0}\033[0m"
+echo -e "\033[33mRTC_ACTION_OFFSET_STEPS: ${RTC_ACTION_OFFSET_STEPS:-dataset_attr_or_1}\033[0m"
 echo -e "\033[33mRTC_USE_POLICY_MPC: ${RTC_USE_POLICY_MPC}\033[0m"
 echo -e "\033[33mPolicy deploy: no H5 saving, no intervention.\033[0m"
 

@@ -103,14 +103,38 @@ class DPWorkspace(BaseWorkspace):
         if cfg.training.use_ema:
             self.ema_model.set_normalizer(normalizer) 
 
+        if cfg.training.debug:
+            cfg.training.num_epochs = 2
+            cfg.training.max_train_steps = 10
+            cfg.training.max_val_steps = 3
+            cfg.training.rollout_every = 1
+            cfg.training.checkpoint_every = 1
+            cfg.training.val_every = 1
+            cfg.training.sample_every = 1
+            verbose = True
+        else:
+            verbose = False
+
+        gradient_accumulate_every = cfg.training.gradient_accumulate_every
+        if gradient_accumulate_every < 1:
+            raise ValueError("training.gradient_accumulate_every must be at least 1")
+
+        train_batches_per_epoch = len(train_dataloader)
+        if cfg.training.max_train_steps is not None:
+            train_batches_per_epoch = min(
+                train_batches_per_epoch,
+                cfg.training.max_train_steps
+            )
+        optimizer_steps_per_epoch = (
+            train_batches_per_epoch + gradient_accumulate_every - 1
+        ) // gradient_accumulate_every
+
         # configure lr scheduler
         lr_scheduler = get_scheduler(
             cfg.training.lr_scheduler,
             optimizer=self.optimizer,
             num_warmup_steps=cfg.training.lr_warmup_steps,
-            num_training_steps=(
-                len(train_dataloader) * cfg.training.num_epochs) \
-                    // cfg.training.gradient_accumulate_every,
+            num_training_steps=optimizer_steps_per_epoch * cfg.training.num_epochs,
             # pytorch assumes stepping LRScheduler every epoch
             # however huggingface diffusers steps it every batch
             last_epoch=self.global_step-1
@@ -157,23 +181,11 @@ class DPWorkspace(BaseWorkspace):
         # save batch for sampling
         train_sampling_batch = None
 
-        if cfg.training.debug:
-            cfg.training.num_epochs = 2
-            cfg.training.max_train_steps = 10
-            cfg.training.max_val_steps = 3
-            cfg.training.rollout_every = 1
-            cfg.training.checkpoint_every = 1
-            cfg.training.val_every = 1
-            cfg.training.sample_every = 1
-            verbose = True
-        else:
-            verbose = False
-        
-        
         RUN_VALIDATION = False # reduce time cost
         
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        self.optimizer.zero_grad()
         with JsonLogger(log_path) as json_logger:
             for local_epoch_idx in tqdm.tqdm(range(cfg.training.num_epochs)):
                 step_log = dict()
@@ -187,18 +199,32 @@ class DPWorkspace(BaseWorkspace):
                         train_sampling_batch = batch
                     # compute loss
                     raw_loss = self.model.compute_loss(batch)
-                    loss = raw_loss / cfg.training.gradient_accumulate_every
+                    accumulation_group_start = (
+                        batch_idx // gradient_accumulate_every
+                    ) * gradient_accumulate_every
+                    accumulation_group_size = min(
+                        gradient_accumulate_every,
+                        train_batches_per_epoch - accumulation_group_start
+                    )
+                    loss = raw_loss / accumulation_group_size
                     loss.backward()
 
-                    # step optimizer
-                    if self.global_step % cfg.training.gradient_accumulate_every == 0:
+                    is_last_batch = (batch_idx + 1) == train_batches_per_epoch
+                    should_step_optimizer = (
+                        (batch_idx + 1) % gradient_accumulate_every == 0
+                        or is_last_batch
+                    )
+
+                    # Step only after a complete accumulation group. The final
+                    # (possibly shorter) group is normalized by its actual size.
+                    if should_step_optimizer:
                         self.optimizer.step()
                         self.optimizer.zero_grad()
                         lr_scheduler.step()
-                    
-                    # update ema
-                    if cfg.training.use_ema:
-                        ema.step(self.model)
+
+                        # EMA tracks optimizer updates rather than micro-batches.
+                        if cfg.training.use_ema:
+                            ema.step(self.model)
 
                     # logging
                     raw_loss_cpu = raw_loss.item()
@@ -214,15 +240,13 @@ class DPWorkspace(BaseWorkspace):
                     if verbose:
                         print(f"total one step time: {t2-t1:.3f}")
 
-                    is_last_batch = (batch_idx == (len(train_dataloader)-1))
                     if not is_last_batch:
                         # log of last step is combined with validation and rollout
                         wandb_run.log(step_log, step=self.global_step)
                         json_logger.log(step_log)
                         self.global_step += 1
 
-                    if (cfg.training.max_train_steps is not None) \
-                        and batch_idx >= (cfg.training.max_train_steps-1):
+                    if is_last_batch:
                         break
 
                 # at the end of each epoch

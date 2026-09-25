@@ -23,6 +23,7 @@ shape_meta: &shape_meta # Reusable full shape metadata, including obs and target
 dataset:
   _target_: dexpie.dataset.value_dataset_image.ValueDatasetImage
   zarr_path : data/box_zarr
+  storage_mode: auto
   seed: 42
   val_ratio: 0.0
   max_train_episodes: 1000
@@ -30,6 +31,7 @@ dataset:
   use_wrist_img: True
   max_length: ${max_length}
   fail_rate: ${fail_rate}
+  fail_gamma: ${fail_gamma}
   num_bins: ${num_bins}
   v_min: ${v_min}
   v_max: ${v_max}

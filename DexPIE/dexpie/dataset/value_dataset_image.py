@@ -5,6 +5,10 @@ import copy
 from dexpie.common.pytorch_util import dict_apply
 from dexpie.common.replay_buffer import ReplayBuffer
 from dexpie.common.value_sampler import (SequenceSampler, get_val_mask, downsample_mask)
+from dexpie.common.memmap_dataset import (
+    resolve_dataset_storage,
+    validate_visual_lengths,
+)
 from dexpie.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer, StringNormalizer
 from dexpie.dataset.base_dataset import BaseDataset
 from dexpie.common.discretizer import UniformDiscretizer
@@ -21,9 +25,11 @@ class ValueDatasetImage(BaseDataset):
             use_wrist_img=False,
             max_length=1000,
             fail_rate=0.1,
+            fail_gamma=1.0,
             num_bins=201,
             v_min=-1,
             v_max=0,
+            storage_mode='auto',
             ):
         super().__init__()
         cprint(f'Loading Dataset from {zarr_path}', 'green')
@@ -31,18 +37,32 @@ class ValueDatasetImage(BaseDataset):
         self.use_wrist_img = use_wrist_img
         self.max_length = max_length
         self.fail_rate = fail_rate
+        self.fail_gamma = fail_gamma
 
         self.discretizer = UniformDiscretizer(num_bins=num_bins, v_min=v_min, v_max=v_max)
+        visual_keys = []
+        if self.use_img:
+            visual_keys.append('img')
+        if self.use_wrist_img:
+            visual_keys.append('wrist_img')
+        self.storage_mode, replay_zarr_path, self.visual_readers = \
+            resolve_dataset_storage(
+                zarr_path=zarr_path,
+                storage_mode=storage_mode,
+                visual_keys=visual_keys,
+            )
+
         self.buffer_keys = [
             'state', 
-            'action',]
-        if self.use_img:
-            self.buffer_keys.append('img')
-        if self.use_wrist_img:
-            self.buffer_keys.append('wrist_img')
+            ]
+        if self.storage_mode == 'memory':
+            self.buffer_keys.extend(visual_keys)
         
         self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path, keys=self.buffer_keys)
+            replay_zarr_path, keys=self.buffer_keys)
+        validate_visual_lengths(
+            self.visual_readers, self.replay_buffer.n_steps
+        )
         
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes, 
@@ -58,6 +78,7 @@ class ValueDatasetImage(BaseDataset):
             obs_keys=self.buffer_keys,
             max_length=self.max_length,
             fail_rate=self.fail_rate,
+            fail_gamma=self.fail_gamma,
             episode_mask=train_mask)
         
         self.train_mask = train_mask
@@ -88,9 +109,10 @@ class ValueDatasetImage(BaseDataset):
         norm_reward = torch.from_numpy(np.clip(reward/self.max_length, -1, 0)) # Normalize to [-1, 0].
         target_dist = self.discretizer.discretize_to_gs_distribution(norm_reward, gaussian_std=1)# Gaussian probability, shape [1, num_bins].
         if self.use_img:
-            image = sample['img'][:].astype(np.float32)[None, :]
+            # Keep RGB observations as uint8 until they reach the target device.
+            image = sample['img'][:][None, :]
         if self.use_wrist_img:
-            wrist_img = sample['wrist_img'][:].astype(np.float32)[None, :]
+            wrist_img = sample['wrist_img'][:][None, :]
             
         data = {
             'obs': {
@@ -107,6 +129,10 @@ class ValueDatasetImage(BaseDataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.sampler.sample_sequence(idx) #
+        if self.storage_mode == 'memmap':
+            frame_idx = self.sampler.get_frame_index(idx)
+            for key, reader in self.visual_readers.items():
+                sample[key] = reader.read_index(frame_idx)
         data = self._sample_to_data(sample)
         to_torch_function = lambda x: torch.from_numpy(x) if x.__class__.__name__ == 'ndarray' else x
         torch_data = dict_apply(data, to_torch_function)

@@ -1,4 +1,4 @@
-name: idp3
+name: DexPIE
 channels:
   - defaults
 dependencies:
@@ -262,4 +262,3 @@ dependencies:
       - yarl==1.15.2
       - zarr==2.12.0
       - zipp==3.20.2
-

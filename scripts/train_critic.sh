@@ -4,10 +4,10 @@
 #   bash scripts/train_critic.sh critic value_image 0311
 
 #dataset_path=/home/ze/projects/DexPIE/training_data_example
-dataset_path=/home/lrz/dp_data/task1_Recap_iter1
-
+#dataset_path=/home/lrz/dp_data/second_task3_Recap_iter2_memmap
+dataset_path=/home/lrz/dp_data/second_task2_Recap_iter1_memmap
 DEBUG=False
-wandb_mode=online
+wandb_mode=offline
 
 
 alg_name=${1}

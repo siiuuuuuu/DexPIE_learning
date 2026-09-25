@@ -5,6 +5,10 @@ import copy
 from dexpie.common.pytorch_util import dict_apply
 from dexpie.common.replay_buffer import ReplayBuffer
 from dexpie.common.sampler import (SequenceSampler, get_val_mask, downsample_mask)
+from dexpie.common.memmap_dataset import (
+    resolve_dataset_storage,
+    validate_visual_lengths,
+)
 from dexpie.common.tools import MATHTOOLS
 from dexpie.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer, StringNormalizer
 from dexpie.dataset.base_dataset import BaseDataset
@@ -28,6 +32,7 @@ class DPDatasetImage(BaseDataset):
             use_wrist_img=False,
             use_depth=False,
             use_relative_action=True,
+            storage_mode='auto',
             ):
         super().__init__()
         cprint(f'Loading DPDataset from {zarr_path}', 'green')
@@ -41,18 +46,31 @@ class DPDatasetImage(BaseDataset):
         self.n_action_steps = n_action_steps
         self.tools=MATHTOOLS()
 
-        buffer_keys = [
-            'state', 
-            'action',] 
+        visual_keys = []
         if self.use_img:
-            buffer_keys.append('img') # Match the image key used during data collection.
+            visual_keys.append('img')
         if self.use_wrist_img:
-            buffer_keys.append('wrist_img')
+            visual_keys.append('wrist_img')
         if self.use_depth:
-            buffer_keys.append('depth')
+            visual_keys.append('depth')
+        self.storage_mode, replay_zarr_path, self.visual_readers = \
+            resolve_dataset_storage(
+                zarr_path=zarr_path,
+                storage_mode=storage_mode,
+                visual_keys=visual_keys,
+            )
+
+        buffer_keys = [
+            'state',
+            'action',]
+        if self.storage_mode == 'memory':
+            buffer_keys.extend(visual_keys)
 
         self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path, keys=buffer_keys)
+            replay_zarr_path, keys=buffer_keys)
+        validate_visual_lengths(
+            self.visual_readers, self.replay_buffer.n_steps
+        )
         
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes, 
@@ -114,9 +132,11 @@ class DPDatasetImage(BaseDataset):
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
         # Use the current pose as the action reference, which is simpler than using the previous action.
         if self.use_img:
-            image = sample['img'][:self.n_obs_steps,].astype(np.float32)
+            # Keep RGB observations as uint8 through DataLoader/pinned-memory transfer.
+            # The policy/workspace converts them to float on the target device before use.
+            image = sample['img'][:self.n_obs_steps,]
         if self.use_wrist_img:
-            wrist_img = sample['wrist_img'][:self.n_obs_steps,].astype(np.float32)
+            wrist_img = sample['wrist_img'][:self.n_obs_steps,]
         if self.use_depth:
             depth = sample['depth'][:self.n_obs_steps,].astype(np.float32)
         if self.use_relative_action:
@@ -153,6 +173,12 @@ class DPDatasetImage(BaseDataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.sampler.sample_sequence(idx)
+        if self.storage_mode == 'memmap':
+            frame_indices = self.sampler.get_frame_indices(
+                idx, np.arange(self.n_obs_steps, dtype=np.int64)
+            )
+            for key, reader in self.visual_readers.items():
+                sample[key] = reader.read_indices(frame_indices)
         data = self._sample_to_data(sample)
         to_torch_function = lambda x: torch.from_numpy(x) if x.__class__.__name__ == 'ndarray' else x
         torch_data = dict_apply(data, to_torch_function)

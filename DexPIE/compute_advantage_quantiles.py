@@ -19,6 +19,10 @@ import zarr
 from omegaconf import OmegaConf, open_dict
 from termcolor import cprint
 
+from dexpie.common.memmap_dataset import (
+    resolve_dataset_storage,
+    validate_visual_lengths,
+)
 from dexpie.workspace.critic_workspace import CriticWorkspace
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -92,8 +96,25 @@ def get_dataset_flag(cfg: OmegaConf, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def read_visual_batch(
+    data_group: zarr.Group,
+    visual_readers: dict,
+    key: str,
+    start: int,
+    stop: int,
+) -> np.ndarray:
+    """Read a contiguous visual batch from legacy Zarr or an NPY memmap."""
+    if key in visual_readers:
+        indices = np.arange(start, stop, dtype=np.int64)
+        return visual_readers[key].read_indices(indices)
+    if key not in data_group:
+        raise KeyError(f"Dataset config requires `{key}`, but data/{key} is missing.")
+    return np.asarray(data_group[key][start:stop])
+
+
 def collect_values_from_zarr(
     zarr_root: zarr.Group,
+    visual_readers: dict,
     value_critic: torch.nn.Module,
     cfg: OmegaConf,
     device: torch.device,
@@ -104,10 +125,17 @@ def collect_values_from_zarr(
     use_img = get_dataset_flag(cfg, "use_img", True)
     use_wrist_img = get_dataset_flag(cfg, "use_wrist_img", False)
 
-    if use_img and "img" not in data_group:
-        raise KeyError("Dataset config requires `img`, but zarr data/img is missing.")
-    if use_wrist_img and "wrist_img" not in data_group:
-        raise KeyError("Dataset config requires `wrist_img`, but zarr data/wrist_img is missing.")
+    if use_img and "img" not in data_group and "img" not in visual_readers:
+        raise KeyError("Dataset config requires `img`, but data/img and img.npy are missing.")
+    if (
+        use_wrist_img
+        and "wrist_img" not in data_group
+        and "wrist_img" not in visual_readers
+    ):
+        raise KeyError(
+            "Dataset config requires `wrist_img`, but data/wrist_img and "
+            "wrist_img.npy are missing."
+        )
 
     batch_size = int(cfg.get("advantage_eval_batch_size", cfg.dataloader.batch_size))
     values = np.empty((n_steps,), dtype=np.float32)
@@ -121,11 +149,17 @@ def collect_values_from_zarr(
         }
         if use_img:
             obs["image"] = torch.from_numpy(
-                data_group["img"][start:stop]
+                read_visual_batch(data_group, visual_readers, "img", start, stop)
             ).unsqueeze(1).to(device, non_blocking=True)
         if use_wrist_img:
             obs["wrist_img"] = torch.from_numpy(
-                data_group["wrist_img"][start:stop]
+                read_visual_batch(
+                    data_group,
+                    visual_readers,
+                    "wrist_img",
+                    start,
+                    stop,
+                )
             ).unsqueeze(1).to(device, non_blocking=True)
 
         obs_for_value = prepare_obs_once(obs)
@@ -211,9 +245,11 @@ def main(cfg: OmegaConf):
     np.random.seed(seed)
     random.seed(seed)
 
-    zarr_path = pathlib.Path(hydra.utils.to_absolute_path(str(cfg.task.dataset.zarr_path))).expanduser()
+    dataset_path = pathlib.Path(
+        hydra.utils.to_absolute_path(str(cfg.task.dataset.zarr_path))
+    ).expanduser()
     with open_dict(cfg):
-        cfg.task.dataset.zarr_path = str(zarr_path)
+        cfg.task.dataset.zarr_path = str(dataset_path)
 
     ckpt_cfg_path = cfg.get("value_critic_ckpt_path", None)
     if ckpt_cfg_path is None:
@@ -225,14 +261,29 @@ def main(cfg: OmegaConf):
     device = resolve_device(str(cfg.training.device))
     value_critic, max_length, use_ema = load_frozen_value_critic(ckpt_path, device)
 
-    zarr_root = zarr.open(str(zarr_path), mode="r+")
+    visual_keys = []
+    if get_dataset_flag(cfg, "use_img", True):
+        visual_keys.append("img")
+    if get_dataset_flag(cfg, "use_wrist_img", False):
+        visual_keys.append("wrist_img")
+    requested_storage_mode = str(cfg.task.dataset.get("storage_mode", "auto"))
+    storage_mode, replay_zarr_path, visual_readers = resolve_dataset_storage(
+        zarr_path=str(dataset_path),
+        storage_mode=requested_storage_mode,
+        visual_keys=visual_keys,
+    )
+
+    zarr_root = zarr.open(replay_zarr_path, mode="r+")
     if "data" not in zarr_root or "meta" not in zarr_root:
-        raise KeyError(f"Invalid replay zarr: missing data/meta group in {zarr_path}")
+        raise KeyError(f"Invalid replay dataset: missing data/meta group in {dataset_path}")
     if "episode_ends" not in zarr_root["meta"]:
-        raise KeyError(f"Invalid replay zarr: missing meta/episode_ends in {zarr_path}")
+        raise KeyError(
+            f"Invalid replay dataset: missing meta/episode_ends in {dataset_path}"
+        )
 
     episode_ends = zarr_root["meta"]["episode_ends"][:].astype(np.int64)
     n_steps = int(zarr_root["data"]["state"].shape[0])
+    validate_visual_lengths(visual_readers, n_steps)
     if len(episode_ends) == 0 or int(episode_ends[-1]) != n_steps:
         raise ValueError(
             f"episode_ends[-1] must equal n_steps. got "
@@ -244,18 +295,24 @@ def main(cfg: OmegaConf):
 
     cprint(f"[Info] dataset steps: {n_steps}", "cyan")
     cprint(f"[Info] dataset episodes: {len(episode_ends)}", "cyan")
+    cprint(f"[Info] dataset storage: {storage_mode} ({dataset_path})", "cyan")
     cprint(f"[Info] critic ckpt: {ckpt_path}", "cyan")
     cprint(f"[Info] use EMA critic: {use_ema}", "cyan")
     cprint(f"[Info] max_length: {max_length}", "cyan")
     cprint(f"[Info] advantage key: data/{advantage_key}", "cyan")
 
-    with torch.inference_mode():
-        values = collect_values_from_zarr(
-            zarr_root=zarr_root,
-            value_critic=value_critic,
-            cfg=cfg,
-            device=device,
-        )
+    try:
+        with torch.inference_mode():
+            values = collect_values_from_zarr(
+                zarr_root=zarr_root,
+                visual_readers=visual_readers,
+                value_critic=value_critic,
+                cfg=cfg,
+                device=device,
+            )
+    finally:
+        for reader in visual_readers.values():
+            reader.close()
 
     advantages = compute_horizon_window_advantages(
         values=values,
@@ -283,14 +340,16 @@ def main(cfg: OmegaConf):
             }
         )
 
-    zarr_out_dir = zarr_path if zarr_path.is_dir() else zarr_path.parent
+    dataset_out_dir = dataset_path if dataset_path.is_dir() else dataset_path.parent
     output_filename = str(cfg.get("advantage_quantile_filename", "advantage_quantiles.json"))
-    output_path = zarr_out_dir / output_filename
+    output_path = dataset_out_dir / output_filename
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     result = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "dataset_zarr_path": str(zarr_path),
+        "dataset_zarr_path": str(dataset_path),
+        "dataset_storage_mode": storage_mode,
+        "replay_zarr_path": str(replay_zarr_path),
         "value_critic_ckpt_path": str(ckpt_path),
         "critic_use_ema": bool(use_ema),
         "horizon": int(cfg.horizon),
@@ -305,7 +364,9 @@ def main(cfg: OmegaConf):
 
     label_info = {
         "generated_at": result["generated_at"],
-        "dataset_zarr_path": str(zarr_path),
+        "dataset_zarr_path": str(dataset_path),
+        "dataset_storage_mode": storage_mode,
+        "replay_zarr_path": str(replay_zarr_path),
         "value_critic_ckpt_path": str(ckpt_path),
         "critic_use_ema": bool(use_ema),
         "method": "horizon_window_nstep",

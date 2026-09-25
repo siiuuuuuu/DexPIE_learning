@@ -121,6 +121,41 @@ class SequenceSampler:
     
     def __len__(self):
         return len(self.indices)
+
+    def get_frame_indices(self, idx, positions):
+        """
+        Map padded sequence positions to absolute replay-buffer frame indices.
+
+        Leading/trailing padding maps to the first/last valid frame, matching
+        sample_sequence without reading the corresponding arrays first.
+        """
+        buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \
+            = self.indices[idx]
+        positions = np.asarray(positions, dtype=np.int64)
+        if positions.ndim != 1:
+            raise ValueError(
+                f"positions must be one-dimensional, got {positions.shape}"
+            )
+        positions = positions.copy()
+        positions[positions < 0] += self.sequence_length
+        if positions.size > 0 and (
+                positions.min() < 0
+                or positions.max() >= self.sequence_length):
+            raise IndexError(
+                f"positions must be in [0, {self.sequence_length}), "
+                f"got {positions}"
+            )
+
+        clipped = np.clip(
+            positions, sample_start_idx, sample_end_idx - 1
+        )
+        frame_indices = (
+            buffer_start_idx + clipped - sample_start_idx
+        )
+        if frame_indices.size > 0:
+            assert frame_indices.min() >= buffer_start_idx
+            assert frame_indices.max() < buffer_end_idx
+        return frame_indices.astype(np.int64, copy=False)
         
     def sample_sequence(self, idx):
         buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx \

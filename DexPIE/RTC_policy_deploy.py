@@ -143,7 +143,7 @@ def env_float(name, default):
     return float(value)
 
 
-def dataset_action_offset_steps(cfg, default=0):
+def dataset_action_offset_steps(cfg, default=1):
     zarr_path = OmegaConf.select(cfg, "task.dataset.zarr_path")
     if zarr_path is None:
         return int(default)
@@ -242,8 +242,13 @@ def clear_policy_outputs(arm_executor, hand_executor):
 
 
 def reset_to_initial(robot, hand_controller, hand_executor):
-    hand_controller.reset()
+    restart_hand_executor = hand_executor.is_running
+    if restart_hand_executor:
+        hand_executor.stop()
     hand_executor.reset_state(DEFAULT_HAND_RESET_COMMAND)
+    hand_controller.reset()
+    if restart_hand_executor:
+        hand_executor.start()
     robot.move_l(DEFAULT_INITIAL_POSE, 0.2, 0.2)
 
 
@@ -270,7 +275,7 @@ def main(cfg: OmegaConf):
     )
     action_offset_steps = env_int(
         "RTC_ACTION_OFFSET_STEPS",
-        dataset_action_offset_steps(cfg, default=0),
+        dataset_action_offset_steps(cfg, default=1),
     )
     initial_valid_start = max(0, obs_latency_steps - action_offset_steps)
     initial_start_delay_steps = max(0, action_offset_steps - obs_latency_steps)

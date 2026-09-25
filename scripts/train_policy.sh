@@ -6,9 +6,9 @@
 
 #dataset_path=/home/ze/projects/DexPIE/training_data_example
 #dataset_path=/home/lrz/dp_data/train_data
-dataset_path=/home/lrz/dp_data/task1_Recap_iter1
+dataset_path=/home/lrz/dp_data/zarr_task_airpod_expertdata
 DEBUG=False
-wandb_mode=online
+wandb_mode=offline
 
 
 alg_name=${1}

@@ -5,6 +5,10 @@ import copy
 from dexpie.common.pytorch_util import dict_apply
 from dexpie.common.replay_buffer import ReplayBuffer
 from dexpie.common.sampler import (SequenceSampler, get_val_mask, downsample_mask)
+from dexpie.common.memmap_dataset import (
+    resolve_dataset_storage,
+    validate_visual_lengths,
+)
 from dexpie.common.tools import MATHTOOLS
 from dexpie.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer, StringNormalizer
 from dexpie.dataset.base_dataset import BaseDataset
@@ -30,6 +34,7 @@ class RecapDatasetImage(BaseDataset):
             use_relative_action=True,
             use_precomputed_advantage=True,
             advantage_key='advantage',
+            storage_mode='auto',
             ):
         super().__init__()
         cprint(f'Loading RecapDatasetImage from {zarr_path}', 'green')
@@ -45,17 +50,31 @@ class RecapDatasetImage(BaseDataset):
         self.n_action_steps = n_action_steps
         self.tools=MATHTOOLS()
 
+        visual_keys = []
+        if self.use_img:
+            visual_keys.append('img')
+        if self.use_wrist_img:
+            visual_keys.append('wrist_img')
+        if self.use_depth:
+            visual_keys.append('depth')
+        self.storage_mode, replay_zarr_path, self.visual_readers = \
+            resolve_dataset_storage(
+                zarr_path=zarr_path,
+                storage_mode=storage_mode,
+                visual_keys=visual_keys,
+            )
+
         buffer_keys = [
             'state', 
             'action',
         ] 
-        disk_replay_buffer = ReplayBuffer.create_from_path(zarr_path)
+        disk_replay_buffer = ReplayBuffer.create_from_path(replay_zarr_path)
         self.has_intervention = 'intervention' in disk_replay_buffer.keys()
         self.has_advantage = self.use_precomputed_advantage and (self.advantage_key in disk_replay_buffer.keys())
         if self.has_intervention:
             buffer_keys.append('intervention')
         else:
-            cprint("No 'intervention' in dataset, mark expert samples as intervention-positive.", 'yellow')
+            cprint("No 'intervention' in dataset, mark samples as intervention-negative.", 'yellow')
         if self.has_advantage:
             buffer_keys.append(self.advantage_key)
             cprint(f"Using precomputed advantage from data/{self.advantage_key}.", 'cyan')
@@ -64,15 +83,14 @@ class RecapDatasetImage(BaseDataset):
                 f"No data/{self.advantage_key} in dataset; Recap/DexPIE training requires offline advantage labels.",
                 'yellow'
             )
-        if self.use_img:
-            buffer_keys.append('img') # Match the image key used during data collection.
-        if self.use_wrist_img:
-            buffer_keys.append('wrist_img')
-        if self.use_depth:
-            buffer_keys.append('depth')
+        if self.storage_mode == 'memory':
+            buffer_keys.extend(visual_keys)
 
         self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path, keys=buffer_keys)
+            replay_zarr_path, keys=buffer_keys)
+        validate_visual_lengths(
+            self.visual_readers, self.replay_buffer.n_steps
+        )
         
         val_mask = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes, 
@@ -138,17 +156,19 @@ class RecapDatasetImage(BaseDataset):
             else:
                 intervention_num = 0
             intervent_positive = np.array(
-                intervention_num > (valid_steps / 3.0), dtype=np.bool_
-            )  # True only when intervention steps exceed one third of valid steps; nearby autonomous steps are usually negatives.
+                valid_steps > 0 and intervention_num == valid_steps, dtype=np.bool_
+            )  # True only when every valid step is an intervention step.
         else:
             intervent_positive = np.array(True, dtype=np.bool_)  # Mark pure expert data as intervention-positive when this field is missing.
         agent_pos = sample['state'][[0,-1],:6].astype(np.float32)
         current_agent_pose = sample['state'][:self.n_obs_steps, 6:].astype(np.float32)
         # Use the current pose as the action reference, which is simpler than using the previous action.
         if self.use_img:
-            image = sample['img'][[0,-1],].astype(np.float32) # Use first and last images to compute advantage from two observations.
+            # Keep RGB observations as uint8 through DataLoader/pinned-memory transfer.
+            # Use first and last images to compute advantage from two observations.
+            image = sample['img'][[0,-1],]
         if self.use_wrist_img:
-            wrist_img = sample['wrist_img'][[0,-1],].astype(np.float32)
+            wrist_img = sample['wrist_img'][[0,-1],]
         if self.use_depth:
             depth = sample['depth'][[0,-1],].astype(np.float32)
         if self.use_relative_action:
@@ -189,6 +209,10 @@ class RecapDatasetImage(BaseDataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.sampler.sample_sequence(idx)
+        if self.storage_mode == 'memmap':
+            frame_indices = self.sampler.get_frame_indices(idx, [0, -1])
+            for key, reader in self.visual_readers.items():
+                sample[key] = reader.read_indices(frame_indices)
         data = self._sample_to_data(sample)
         to_torch_function = lambda x: torch.from_numpy(x) if x.__class__.__name__ == 'ndarray' else x
         torch_data = dict_apply(data, to_torch_function)

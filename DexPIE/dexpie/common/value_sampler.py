@@ -69,9 +69,13 @@ class SequenceSampler:
         obs_keys,
         max_length: int,
         fail_rate: float = 0.1,
+        fail_gamma: float = 1.0,
         episode_mask: Optional[np.ndarray] = None,
     ):
         super().__init__()
+
+        if not 0.0 <= fail_gamma <= 1.0:
+            raise ValueError(f"fail_gamma must be in [0, 1], got {fail_gamma}")
 
         fail_reward = -max_length * fail_rate
         episode_ends = replay_buffer.episode_ends[:]  # Episode end indices.
@@ -97,19 +101,32 @@ class SequenceSampler:
             indices = np.zeros((0, 4), dtype=np.int64)
 
         rewards_list = []
+        frame_indices_list = []
         for idx in range(len(indices)):
-            episode_idx, __, __, episode_length = indices[idx]  # Sequence index.
+            episode_idx, start_idx, end_idx, episode_length = indices[idx]
             rewards = self.progess_reward(episode_length)  # Compute cumulative return for each observation.
             if not success[episode_idx]:  # Failed episode.
-                # Apply failure penalty to every step in this segment.
-                rewards = rewards + fail_reward
+                # Treat failure as a terminal penalty and discount it backward in time.
+                steps_to_failure = np.arange(
+                    episode_length - 1, -1, -1, dtype=np.float32
+                )
+                failure_discount = np.power(
+                    np.float32(fail_gamma), steps_to_failure
+                )
+                rewards = rewards + fail_reward * failure_discount
             rewards_list.append(rewards)
+            frame_indices_list.append(
+                np.arange(start_idx, end_idx, dtype=np.int64)
+            )
 
         if len(rewards_list) == 0:
             self.rewards = np.zeros((0,), dtype=np.float32)
+            self.frame_indices = np.zeros((0,), dtype=np.int64)
         else:
             self.rewards = np.concatenate(rewards_list)
+            self.frame_indices = np.concatenate(frame_indices_list)
         self.length = len(self.rewards)
+        assert self.length == len(self.frame_indices)
         # Concatenate all observation returns for later observation-return pairing.
 
         self.keys = list(obs_keys)
@@ -127,9 +144,13 @@ class SequenceSampler:
 
     def sample_sequence(self, idx):
         result = dict()
+        frame_idx = self.get_frame_index(idx)
 
         for key in self.keys:
-            result[key] = self.replay_buffer[key][idx]  # Fetch observation-reward pair.
+            result[key] = self.replay_buffer[key][frame_idx]
         result['reward'] = np.array([self.rewards[idx]])
 
         return result
+
+    def get_frame_index(self, idx):
+        return int(self.frame_indices[idx])

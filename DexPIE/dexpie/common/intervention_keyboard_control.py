@@ -50,6 +50,10 @@ class InterventionKeyboardControl:
         while not self.collect_end.is_set() and not self.recording.is_set():
             self.recording.wait(timeout=0.1)
 
+    def end_episode(self):
+        self.recording.clear()
+        self.intervention.clear()
+
     def is_recording(self):
         return self.recording.is_set()
 

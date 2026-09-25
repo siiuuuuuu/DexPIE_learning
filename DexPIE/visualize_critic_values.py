@@ -14,6 +14,10 @@ import numpy as np
 import torch
 from termcolor import cprint
 
+from dexpie.common.memmap_dataset import (
+    resolve_dataset_storage,
+    validate_visual_lengths,
+)
 from dexpie.common.replay_buffer import ReplayBuffer
 from dexpie.workspace.critic_workspace import CriticWorkspace
 
@@ -32,10 +36,21 @@ def parse_args():
         help="Path to critic checkpoint (.ckpt).",
     )
     parser.add_argument(
+        "--dataset_path",
         "--zarr_path",
+        dest="dataset_path",
         type=str,
         default=None,
-        help="Optional dataset zarr path. If not set, read from checkpoint cfg.",
+        help=(
+            "Optional dataset root (legacy Zarr or converted memmap layout). "
+            "If not set, read from checkpoint cfg."
+        ),
+    )
+    parser.add_argument(
+        "--storage_mode",
+        choices=("auto", "memory", "memmap"),
+        default="auto",
+        help="Dataset storage mode. The default auto-detects converted memmap datasets.",
     )
     parser.add_argument(
         "--num_trajectories",
@@ -111,6 +126,22 @@ def resolve_device(prefer_device: str, cfg_device: str) -> torch.device:
     return torch.device(cfg_device)
 
 
+def read_visual_frames(
+    replay_buffer: ReplayBuffer,
+    visual_readers: dict,
+    key: str,
+    start: int,
+    stop: int,
+) -> np.ndarray:
+    """Read a contiguous visual slice from legacy Zarr or an NPY memmap."""
+    if key in visual_readers:
+        indices = np.arange(start, stop, dtype=np.int64)
+        return visual_readers[key].read_indices(indices)
+    if key not in replay_buffer:
+        raise KeyError(f"dataset is missing visual key data/{key}")
+    return np.asarray(replay_buffer[key][start:stop])
+
+
 def main():
     args = parse_args()
     ckpt_path = pathlib.Path(args.critic_ckpt).expanduser()
@@ -126,11 +157,36 @@ def main():
     critic.to(device)
     critic.eval()
 
-    zarr_path = args.zarr_path if args.zarr_path is not None else str(cfg.task.dataset.zarr_path)
-    replay_buffer = ReplayBuffer.create_from_path(zarr_path)
+    obs_meta = cfg.shape_meta.obs
+    use_image = "image" in obs_meta
+    use_wrist = "wrist_img" in obs_meta
+    if not use_image:
+        raise ValueError("critic shape_meta does not contain image input.")
+
+    visual_keys = ["img"]
+    if use_wrist:
+        visual_keys.append("wrist_img")
+
+    dataset_path = (
+        args.dataset_path
+        if args.dataset_path is not None
+        else str(cfg.task.dataset.zarr_path)
+    )
+    storage_mode, replay_zarr_path, visual_readers = resolve_dataset_storage(
+        zarr_path=dataset_path,
+        storage_mode=args.storage_mode,
+        visual_keys=visual_keys,
+    )
+    replay_buffer = ReplayBuffer.create_from_path(replay_zarr_path)
+    validate_visual_lengths(visual_readers, int(replay_buffer.n_steps))
+    cprint(
+        f"[Info] dataset storage: {storage_mode} ({dataset_path})",
+        "cyan",
+    )
+
     n_episodes = replay_buffer.n_episodes
     if n_episodes <= 0:
-        raise ValueError(f"empty dataset: {zarr_path}")
+        raise ValueError(f"empty dataset: {dataset_path}")
 
     use_episode_range = args.episode_start is not None or args.episode_end is not None
     if use_episode_range:
@@ -165,45 +221,52 @@ def main():
         sampled_episode_ids = rng.sample(range(n_episodes), k=num_trajectories)
         cprint(f"[Info] sampled episodes: {sampled_episode_ids}", "cyan")
 
-    obs_meta = cfg.shape_meta.obs
-    use_image = "image" in obs_meta
-    use_wrist = "wrist_img" in obs_meta
-    if not use_image:
-        raise ValueError("critic shape_meta does not contain image input.")
-
     agent_pos_dim = int(obs_meta.agent_pos.shape[0])
+    episode_ends = replay_buffer.episode_ends[:].astype(np.int64)
 
     values_by_episode = []
     with torch.inference_mode():
         for ep_idx in sampled_episode_ids:
-            episode = replay_buffer.get_episode(ep_idx, copy=False)
-
-            state = episode["state"].astype(np.float32)
+            episode_start_idx = 0 if ep_idx == 0 else int(episode_ends[ep_idx - 1])
+            episode_end_idx = int(episode_ends[ep_idx])
+            state = np.asarray(
+                replay_buffer["state"][episode_start_idx:episode_end_idx],
+                dtype=np.float32,
+            )
             if state.shape[-1] < agent_pos_dim:
                 raise ValueError(
                     f"state dim {state.shape[-1]} < required agent_pos dim {agent_pos_dim}"
                 )
             agent_pos = state[:, :agent_pos_dim]
 
-            img = episode["img"].astype(np.float32)
-            wrist_img = None
-            if use_wrist:
-                if "wrist_img" not in episode:
-                    raise KeyError("shape_meta needs wrist_img, but dataset has no wrist_img key.")
-                wrist_img = episode["wrist_img"].astype(np.float32)
-
             traj_len = agent_pos.shape[0]
             chunk_size = max(1, int(args.chunk_size))
             value_chunks = []
             for start in range(0, traj_len, chunk_size):
                 end = min(start + chunk_size, traj_len)
+                global_start = episode_start_idx + start
+                global_end = episode_start_idx + end
+                img = read_visual_frames(
+                    replay_buffer,
+                    visual_readers,
+                    "img",
+                    global_start,
+                    global_end,
+                ).astype(np.float32, copy=False)
                 obs_dict = {
                     "agent_pos": torch.from_numpy(agent_pos[start:end]).unsqueeze(0).to(device),
-                    "image": torch.from_numpy(img[start:end]).unsqueeze(0).to(device),
+                    "image": torch.from_numpy(img).unsqueeze(0).to(device),
                 }
                 if use_wrist:
-                    obs_dict["wrist_img"] = torch.from_numpy(wrist_img[start:end]).unsqueeze(0).to(
-                        device
+                    wrist_img = read_visual_frames(
+                        replay_buffer,
+                        visual_readers,
+                        "wrist_img",
+                        global_start,
+                        global_end,
+                    ).astype(np.float32, copy=False)
+                    obs_dict["wrist_img"] = (
+                        torch.from_numpy(wrist_img).unsqueeze(0).to(device)
                     )
 
                 pred_value = critic(obs_dict)  # [1, t, 1]
@@ -217,6 +280,9 @@ def main():
 
             if device.type == "cuda":
                 torch.cuda.empty_cache()
+
+    for reader in visual_readers.values():
+        reader.close()
 
     output_path = pathlib.Path(args.output).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)

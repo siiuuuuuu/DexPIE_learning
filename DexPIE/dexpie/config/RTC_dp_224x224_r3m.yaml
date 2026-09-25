@@ -91,18 +91,20 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 32
-  num_workers: 8
+  batch_size: 64
+  num_workers: 4
   shuffle: True
   pin_memory: True
-  persistent_workers: False
+  persistent_workers: True
+  prefetch_factor: 2
 
 val_dataloader:
   batch_size: 64
-  num_workers: 8
+  num_workers: 4
   shuffle: False
   pin_memory: True
-  persistent_workers: False
+  persistent_workers: True
+  prefetch_factor: 2
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -118,11 +120,11 @@ training:
   resume: False
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 301
-  gradient_accumulate_every: 1
+  num_epochs: 501
+  gradient_accumulate_every: 2
   use_ema: True
   rollout_every: 200
-  checkpoint_every: 100
+  checkpoint_every: 50
   val_every: 100
   sample_every: 5
   # steps per epoch
@@ -148,7 +150,7 @@ checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 2
+    k: 3
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False

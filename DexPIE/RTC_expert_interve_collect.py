@@ -55,10 +55,10 @@ DEFAULT_HAND_EXECUTOR_HZ = 120.0
 DEFAULT_HAND_INTERVENTION_W = 30.0  # Natural frequency; larger values track targets faster.
 DEFAULT_HAND_INTERVENTION_Z = 0.85  # Damping ratio; larger values reduce overshoot and smooth motion.
 DEFAULT_HAND_INTERVENTION_INPUT_ALPHA = 0.84
-DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task4_iter1"
+DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task3_iter2"
 DEFAULT_CONTROL_DT = 1.0 / 30.0
 DEFAULT_IMAGE_SIZE = 256
-DEFAULT_MAX_TASK_LENGTH = 1000  # Max task length used to normalize reward calculation.
+DEFAULT_MAX_TASK_LENGTH = 800  # Max task length used to normalize reward calculation.
 DEFAULT_ROBOT_STATE_FREQUENCY = 125.0
 DEFAULT_ARM_SERVO_FREQUENCY = 120
 DEFAULT_TRACKER_FREQUENCY = 80.0
@@ -68,8 +68,8 @@ DEFAULT_ALIGNMENT_TOLERANCE_MS = 15.0
 DEFAULT_FRONT_CAMERA_FPS = 30
 DEFAULT_WRIST_CAMERA_FPS = 60
 DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
-DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 5.0
-DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 5.0
+DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 2.0
+DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 2.0
 DEFAULT_RTC_OBS_LATENCY_STEPS = 1 #测出来是有个读出延迟为一帧,曝光延迟不知道有没有，至少挺小的，不到一帧
 
 
@@ -108,7 +108,7 @@ def env_float(name, default):
     return float(value)
 
 
-def dataset_action_offset_steps(cfg, default=0):
+def dataset_action_offset_steps(cfg, default=1):
     zarr_path = OmegaConf.select(cfg, "task.dataset.zarr_path")
     if zarr_path is None:
         return int(default)
@@ -121,6 +121,16 @@ def dataset_action_offset_steps(cfg, default=0):
         return int(attrs.get("action_offset_frames", default))
     except Exception:
         return int(default)
+
+
+def ask_yes_no(prompt):
+    while True:
+        user_input = input(prompt).lower().strip()
+        if "y" in user_input:
+            return True
+        if "n" in user_input:
+            return False
+        print("Please enter y or n.")
 
 
 @hydra.main(
@@ -147,7 +157,7 @@ def main(cfg: OmegaConf):
     )
     action_offset_steps = env_int(
         "RTC_ACTION_OFFSET_STEPS",
-        dataset_action_offset_steps(cfg, default=0),
+        dataset_action_offset_steps(cfg, default=1),
     )
     initial_valid_start = max(0, obs_latency_steps - action_offset_steps)
     initial_start_delay_steps = max(0, action_offset_steps - obs_latency_steps)
@@ -363,17 +373,19 @@ def main(cfg: OmegaConf):
                 step_count += 1
 
             # Stop servo before ending the recording.
+            keyboard_control.end_episode()
             arm_executor.set_idle(stop_servo=True)
             hand_executor.stop()
             time.sleep(0.3)
 
             # Save data in RTC_deploy format and keep intervention labels.
             if len(episode) > 0:
-                usr_success = input("Was the task completed successfully? (y/n): ").lower().strip()
-                success = (usr_success == 'y')
-                user_choice = input("Save recorded data? (y/n): ").lower().strip()
+                success = ask_yes_no(
+                    "Was the task completed successfully? (y/n): "
+                )
+                should_save = ask_yes_no("Save recorded data? (y/n): ")
 
-                if user_choice == 'y':
+                if should_save:
                     record_file_name = os.path.join(
                         data_dir,
                         datetime.now().strftime("demo_%Y%m%d_%H%M%S") + ".h5"
