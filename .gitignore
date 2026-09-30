@@ -26,6 +26,7 @@ ckpts/
 raw_data/
 timm/
 .vscode/
+.codex
 .DS_Store
 
 deploy_dir/
