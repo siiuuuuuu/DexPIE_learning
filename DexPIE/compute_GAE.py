@@ -19,7 +19,7 @@ import zarr
 from omegaconf import OmegaConf, open_dict
 from termcolor import cprint
 
-from compute_advantage_quantiles import (
+from dexpie.common.advantage_labeling import (
     collect_values_from_zarr,
     get_dataset_flag,
     load_frozen_value_critic,
@@ -61,7 +61,7 @@ def compute_window_gae_advantages(
     ``window_horizon - 1`` TD transitions contribute to one label.
 
     Terminal observations use the critic-predicted value as their bootstrap,
-    matching the value target and the existing n-step estimator.
+    matching the value target.
     """
     values = np.asarray(values, dtype=np.float32)
     episode_ends = np.asarray(episode_ends, dtype=np.int64)
@@ -199,7 +199,7 @@ def main(cfg: OmegaConf):
     window_multiplier = float(cfg.get("gae_window_multiplier", 1.0))
     window_horizon = resolve_window_horizon(policy_horizon, window_multiplier)
     max_transitions = window_horizon - 1
-    advantage_key = str(cfg.get("advantage_key", "advantage_gae"))
+    advantage_key = str(cfg.get("advantage_key", "advantage"))
     overwrite_advantage = bool(cfg.get("overwrite_advantage", True))
 
     cprint(f"[Info] dataset steps: {n_steps}", "cyan")
@@ -262,7 +262,7 @@ def main(cfg: OmegaConf):
     )
     dataset_out_dir = dataset_path if dataset_path.is_dir() else dataset_path.parent
     output_filename = str(
-        cfg.get("advantage_quantile_filename", "advantage_quantiles_gae.json")
+        cfg.get("advantage_quantile_filename", "advantage_quantiles.json")
     )
     output_path = dataset_out_dir / output_filename
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,21 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 # Examples:
-#
-#   bash scripts/compute_GAE.sh
 # DATASET may be either a legacy Zarr directory or a converted memmap dataset root.
 #   bash scripts/compute_GAE.sh /path/to/latest.ckpt DATASET
-#   bash scripts/compute_GAE.sh /path/to/latest.ckpt DATASET DexPIE Recap-image 0 "[30,40,10,50,20]" advantage_quantiles_gae.json advantage_gae 0.97 2 1.0
+#   bash scripts/compute_GAE.sh /path/to/latest.ckpt DATASET DexPIE Recap-image 0 "[30,40,10,50,20]" advantage_quantiles.json advantage 0.99 1.2 1.0
 
-critic_ckpt=${1:-/home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0802_task3_iter2_seed0/checkpoints/latest.ckpt}
-dataset_path=${2:-/home/lrz/dp_data/test_task3_dataset}
+if (( $# < 2 )); then
+    echo "Usage: $0 CRITIC_CKPT DATASET [CONFIG] [TASK] [GPU_ID] [TOP_PERCENTAGES] [OUTPUT_FILENAME] [ADVANTAGE_KEY] [GAE_LAMBDA] [WINDOW_MULTIPLIER] [GAE_GAMMA]" >&2
+    exit 2
+fi
+
+critic_ckpt=$1
+dataset_path=$2
 config_name=${3:-DexPIE}
 task_name=${4:-Recap-image}
-gpu_id=${5:-0}
+gpu_id=${5:-${GPU_ID:-0}}
 top_percentages=${6:-'[30,40,10,50,20]'}
-output_filename=${7:-advantage_quantiles_gae.json}
-advantage_key=${8:-advantage_gae}
+output_filename=${7:-advantage_quantiles.json}
+advantage_key=${8:-advantage}
 gae_lambda=${9:-0.99}
 gae_window_multiplier=${10:-1.2}
 gae_gamma=${11:-1.0}
+python_bin=${PYTHON:-python}
 
 echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"
 echo -e "\033[33mconfig: ${config_name}, task: ${task_name}\033[0m"
@@ -32,7 +39,7 @@ cd DexPIE
 export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 
-python compute_GAE.py --config-name="${config_name}" \
+"${python_bin}" compute_GAE.py --config-name="${config_name}" \
     "task=${task_name}" \
     "training.device=cuda:0" \
     "value_critic_ckpt_path=${critic_ckpt}" \

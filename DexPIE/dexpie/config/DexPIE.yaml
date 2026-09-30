@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: Recap_image
+  - task: Recap-image
 
 name: train_diffusion_unet_hybrid
 _target_: dexpie.workspace.dexpie_workspace.DexPIEWorkspace
@@ -19,11 +19,11 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 use_image: true
-value_critic_ckpt_path: /home/lrz/project/DexPIE/DexPIE/data/outputs/value_image-critic-0507_task1_iter1_seed0/checkpoints/latest.ckpt
+value_critic_ckpt_path: null  # Required only by offline advantage-labeling tools; pass it on the command line.
 advantage_quantiles_json_path: ${task.dataset.zarr_path}/advantage_quantiles.json
 advantage_quantile_low: 0.6
 advantage_quantile_high: 0.8
-advantage_beta_divisor: 5  # Increase to 6.0 to make the top-40% split sharper.
+advantage_beta_divisor: 1  
 advantage_beta_min: 1.0e-6
 policy:
   _target_: dexpie.policy.DexPIE.DexPIEPolicy  #DexPIE.DexPIEPolicy

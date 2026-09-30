@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - task: two_image
+  - task: two-image
 
 name: train_diffusion_unet_hybrid
 _target_: dexpie.workspace.dp_workspace.DPWorkspace

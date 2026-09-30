@@ -165,7 +165,7 @@ class RecapWorkspace(BaseWorkspace):
             return batch["advantage"].float().reshape(-1)
 
         raise RuntimeError(
-            "Missing batch['advantage']. Run scripts/compute_advantage_quantiles.sh "
+            "Missing batch['advantage']. Run scripts/compute_GAE.sh "
             "to write data/advantage into the zarr dataset before training."
         )
 
@@ -247,7 +247,7 @@ class RecapWorkspace(BaseWorkspace):
         if not bool(getattr(dataset, "has_advantage", False)):
             raise ValueError(
                 "Recap training now requires precomputed zarr advantage labels. "
-                "Run scripts/compute_advantage_quantiles.sh for this dataset first."
+                "Run scripts/compute_GAE.sh for this dataset first."
             )
         cprint("[Advantage] using precomputed zarr labels from dataset.", "cyan")
         self._load_advantage_quantiles(cfg)

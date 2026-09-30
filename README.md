@@ -4,6 +4,8 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2606.09615-b31b1b?style=flat-square)](https://arxiv.org/abs/2606.09615)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
+[Companion teleoperation and data-conversion repository: **tele_UR**](https://github.com/siiuuuuuu/tele_UR)
+
 **DexPIE: Stable Dexterous Policy Improvement from Real-World Experience**
 
 DexPIE is a UR arm and Inspire Hand manipulation framework for training,
@@ -122,6 +124,9 @@ pip install -e third_party/r3m
 pip install -e DexPIE
 ```
 
+The environment file uses the official PyTorch CUDA 11.8 wheel index for the
+pinned PyTorch, TorchVision, and TorchAudio versions.
+
 Install the Intel RealSense SDK and its udev rules before using the cameras.
 The Python package alone does not install the system driver. If access to the
 Inspire Hand serial device is denied, configure a persistent udev rule or set a
@@ -206,15 +211,17 @@ correct episode-level success/failure labels.
 Before running the collector, review the constants at the top of
 `DexPIE/RTC_expert_interve_collect.py`. In particular, configure:
 
-- `DEFAULT_DATA_DIR`: directory used to save rollout HDF5 files;
 - `DEFAULT_UR_HOST`, `DEFAULT_WORKSPACE_LIMITS`, and `DEFAULT_INITIAL_POSE`;
 - `DEFAULT_HAND_PORT`, baud rate, and hand reset command;
 - camera image size and front/wrist camera rates; and
 - policy, tracker, robot-state, arm-servo, and hand-control rates.
 
-Also verify the dataset and checkpoint run identifiers in
-`scripts/RTC_expert_interve_collect.sh`. These settings are hardware- and
-machine-specific and should be checked before every deployment setup.
+Pass the rollout HDF5 output directory as the collector's fifth argument, or
+set it through `DEXPIE_DATA_DIR`.
+
+Also verify that the dataset and run tag arguments select the intended
+normalizer and checkpoint. These settings are deployment-specific and should
+be checked before every collection session.
 
 This path runs the policy while allowing an operator to take control through
 an OpenVR tracker and MANUS glove. For the first iteration, collect rollouts
@@ -224,7 +231,9 @@ from the demonstration-based warm-up policy:
 bash scripts/RTC_expert_interve_collect.sh \
   RTC_dp_224x224_r3m \
   two-image \
-  <warmup-tag>
+  <warmup-tag> \
+  /path/to/warmup_dataset.zarr \
+  /path/to/rollout_hdf5
 ```
 
 After the first DexPIE policy has been trained, use its checkpoint for the
@@ -234,7 +243,9 @@ next iteration:
 bash scripts/RTC_expert_interve_collect.sh \
   DexPIE \
   Recap-image \
-  <iteration-tag>
+  <iteration-tag> \
+  /path/to/labeled_dataset.zarr \
+  /path/to/rollout_hdf5
 ```
 
 Keyboard controls are:
@@ -257,22 +268,23 @@ timestamps/
 success (HDF5 attribute)
 ```
 
-The output directory is currently configured by `DEFAULT_DATA_DIR` in
-`DexPIE/RTC_expert_interve_collect.py`. Convert and merge the saved episodes
-with `tele_UR/convert_demos_rollout.py`, retrain the critic on the expanded
-dataset, recompute advantage labels, and train the next DexPIE policy. Repeat
-this loop for subsequent policy-improvement iterations.
+Convert and merge the saved episodes with
+`tele_UR/convert_demos_rollout.py`, retrain the critic on the expanded dataset,
+recompute advantage labels, and train the next DexPIE policy. Repeat this loop
+for subsequent policy-improvement iterations.
 
 ## Quick Start
 
 All provided shell scripts are launched from the repository root and then
-change into the nested `DexPIE/` package directory. Before running them, edit
-their `dataset_path`, GPU, run tag, and other machine-specific values.
+change into the nested `DexPIE/` package directory. Dataset paths are explicit
+arguments; they may alternatively be supplied through `DATASET_PATH`.
+`GPU_ID`, `PYTHON`, `WANDB_MODE`, and `DEBUG` provide optional runtime
+overrides.
 
 The common script arguments are:
 
 ```text
-bash <script> <algorithm> <task> <tag>
+bash <script> <algorithm> <task> <tag> <dataset>
 ```
 
 The output directory is derived from these values as:
@@ -287,7 +299,11 @@ Convert the initial expert demonstrations to Zarr and train a dual-camera RTC
 policy:
 
 ```bash
-bash scripts/train_policy.sh RTC_dp_224x224_r3m two-image <warmup-tag>
+bash scripts/train_policy.sh \
+  RTC_dp_224x224_r3m \
+  two-image \
+  <warmup-tag> \
+  /path/to/expert_dataset.zarr
 ```
 
 This policy provides a reasonable starting behavior for the first rollout. It
@@ -303,7 +319,9 @@ Deploy the warm-up checkpoint with the expert-intervention collector:
 bash scripts/RTC_expert_interve_collect.sh \
   RTC_dp_224x224_r3m \
   two-image \
-  <warmup-tag>
+  <warmup-tag> \
+  /path/to/expert_dataset.zarr \
+  /path/to/rollout_hdf5
 ```
 
 Allow the policy to act autonomously and press `e` whenever expert correction
@@ -327,11 +345,15 @@ and DexPIE training steps below.
 
 ### 4. Train the value critic
 
-Set `dataset_path` in `scripts/train_critic.sh` to the mixed Zarr dataset with
-accurate `meta/success` labels, then run from the DexPIE repository root:
+Use the mixed Zarr dataset with accurate `meta/success` labels, then run from
+the DexPIE repository root:
 
 ```bash
-bash scripts/train_critic.sh critic value_image <iteration-tag>
+bash scripts/train_critic.sh \
+  critic \
+  value_image \
+  <iteration-tag> \
+  /path/to/mixed_dataset.zarr
 ```
 
 The critic predicts a categorical value distribution over 201 bins in
@@ -344,23 +366,28 @@ Run the advantage tool with the newly trained critic and the same mixed
 dataset:
 
 ```bash
-bash scripts/compute_advantage_quantiles.sh \
+bash scripts/compute_GAE.sh \
   /path/to/critic/latest.ckpt \
   /path/to/mixed_dataset.zarr \
   DexPIE \
   Recap-image
 ```
 
-The tool evaluates the critic, writes `data/advantage` into the Zarr dataset,
-stores labeling metadata in the Zarr attributes, and creates
-`advantage_quantiles.json` next to the dataset arrays. Existing advantage
-labels are overwritten by default.
+The tool evaluates the critic, computes finite-window generalized advantage
+estimates (GAE), writes `data/advantage` into the dataset, stores labeling
+metadata in the Zarr attributes, and creates `advantage_quantiles.json` next
+to the dataset arrays. Existing advantage labels are overwritten by default.
 
-The per-step label uses the end of the current policy horizon:
+The per-step label uses temporal-difference residuals over a finite window:
 
 ```text
-advantage[t] = -(end_t - t) / max_length + V[end_t] - V[t]
+delta[t] = -1 / max_length + gamma * V[t + 1] - V[t]
+advantage[t] = sum((gamma * lambda)^k * delta[t + k], k=0,...,d-1)
 ```
+
+By default, `gamma=1.0`, `lambda=0.99`, and the window contains up to
+`ceil(1.2 * policy_horizon) - 1` transitions without crossing an episode
+boundary.
 
 ### 6. Train DexPIE
 
@@ -371,7 +398,11 @@ step; DexPIE policy training consumes the stored labels and does not run the
 critic online.
 
 ```bash
-bash scripts/train_policy.sh DexPIE Recap-image <iteration-tag>
+bash scripts/train_policy.sh \
+  DexPIE \
+  Recap-image \
+  <iteration-tag> \
+  /path/to/mixed_dataset.zarr
 ```
 
 The first DexPIE run is trained from the labeled mixed dataset. For later
@@ -388,7 +419,9 @@ Use the new DexPIE checkpoint for another intervention rollout:
 bash scripts/RTC_expert_interve_collect.sh \
   DexPIE \
   Recap-image \
-  <iteration-tag>
+  <iteration-tag> \
+  /path/to/mixed_dataset.zarr \
+  /path/to/next_rollout_hdf5
 ```
 
 Merge the new HDF5 episodes into the next Zarr dataset, retrain the critic,
@@ -411,39 +444,25 @@ bash scripts/vis_value_trend.sh \
 The script evaluates frame-wise critic values on random episodes or on an
 explicit episode range and saves a plot.
 
-### Advantage playback
-
-```bash
-bash scripts/visualize_zarr_advantage_playback.sh \
-  /path/to/dataset.zarr \
-  25 \
-  /path/to/dataset.zarr/advantage_quantiles.json \
-  0
-```
-
-The viewer synchronizes the front and wrist images with the advantage curve,
-quantile thresholds, and intervention timeline. Controls are:
-
-- `Space`: pause or resume;
-- `f` / `b`: move forward or backward by 10 frames;
-- `r`: restart the current episode;
-- `n` / `p`: next or previous episode; and
-- `q`: quit.
-
 ## Pure Policy Deployment
 
-Edit the dataset/checkpoint identifiers in the launcher and the hardware
-constants in `DexPIE/RTC_policy_deploy.py`, then run:
+Pass the training dataset and checkpoint run tag to the launcher, review the
+hardware constants in `DexPIE/RTC_policy_deploy.py`, then run:
 
 ```bash
-bash scripts/RTC_policy_deploy.sh DexPIE Recap-image <tag>
+bash scripts/RTC_policy_deploy.sh \
+  DexPIE \
+  Recap-image \
+  <tag> \
+  /path/to/training_dataset.zarr
 ```
 
-The launcher reconstructs the run directory from the three arguments and
-loads `checkpoints/latest.ckpt`. Deployment uses an asynchronous Ray GPU actor,
-conditions each new diffusion trajectory on any already executed action
-prefix, and sends the resulting sequence to high-rate arm and hand executors.
-The current arm path uses direct interpolation rather than MPC.
+The launcher reconstructs the run directory from the algorithm, task, and tag,
+then loads `checkpoints/latest.ckpt`; the dataset argument supplies the
+normalizer and alignment metadata. Deployment uses an asynchronous Ray GPU
+actor, conditions each new diffusion trajectory on any already executed
+action prefix, and sends the resulting sequence to high-rate arm and hand
+executors. The current arm path uses direct interpolation.
 
 Pure deployment does not save HDF5 data and does not initialize the human
 intervention devices. Keyboard controls are:
@@ -498,7 +517,7 @@ launcher arguments reconstruct the same run directory used during training.
     ├── train.py                      # Hydra training entry point
     ├── RTC_policy_deploy.py          # pure RTC deployment
     ├── RTC_expert_interve_collect.py # rollout and intervention collection
-    ├── compute_advantage_quantiles.py
+    ├── compute_GAE.py                # finite-window GAE labeling
     ├── visualize_critic_values.py
     ├── communication/                # UR and Inspire Hand interfaces
     ├── human_intervention/           # OpenVR and MANUS intervention stack
@@ -510,19 +529,6 @@ launcher arguments reconstruct the same run directory used during training.
         ├── workspace/                # training and checkpoint workflows
         └── common/                   # RTC, alignment, replay, and executor utilities
 ```
-
-## Known Limitations
-
-- Robot addresses, camera selection, serial ports, initial poses, and several
-  dataset/checkpoint paths are currently machine-specific defaults.
-- HDF5 collection/conversion utilities are split between this repository and
-  the companion `tele_UR` repository.
-- The current task configurations primarily target dual 224x224 RGB inputs, a
-  six-dimensional robot observation, and a 15-dimensional action.
-- Deployment and intervention require real hardware and cannot be fully
-  validated through a software-only test.
-- Changing camera rate, action-label offset, or control rate requires
-  rechecking timestamp alignment and latency compensation.
 
 ## BibTeX
 

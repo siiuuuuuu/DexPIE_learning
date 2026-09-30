@@ -14,9 +14,9 @@ dataset_obs_steps: ${n_obs_steps}
 num_bins: 201
 v_min: -1
 v_max:  0
-max_length: 1300
-fail_rate: 1 # Terminal failure penalty magnitude after value normalization.
-fail_gamma: 0.99 # Discount the terminal failure penalty backward through the trajectory.
+max_length: 800
+fail_rate: 0.5 # Terminal failure penalty magnitude after value normalization.
+fail_gamma: 1 # Discount the terminal failure penalty backward through the trajectory.
 use_image: true
 policy:
   _target_: dexpie.policy.value_critic.ValueCritic
@@ -51,7 +51,7 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 128
+  batch_size: 256
   num_workers: 4
   shuffle: True
   pin_memory: True
@@ -59,7 +59,7 @@ dataloader:
   prefetch_factor: 2
 
 val_dataloader:
-  batch_size: 128
+  batch_size: 256
   num_workers: 4
   shuffle: False
   pin_memory: True

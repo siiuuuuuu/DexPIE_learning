@@ -55,7 +55,7 @@ DEFAULT_HAND_EXECUTOR_HZ = 120.0
 DEFAULT_HAND_INTERVENTION_W = 30.0  # Natural frequency; larger values track targets faster.
 DEFAULT_HAND_INTERVENTION_Z = 0.85  # Damping ratio; larger values reduce overshoot and smooth motion.
 DEFAULT_HAND_INTERVENTION_INPUT_ALPHA = 0.84
-DEFAULT_DATA_DIR = "~/dp_data/offlineRL_data/test_task3_iter2"
+DEFAULT_DATA_DIR = os.environ.get("DEXPIE_DATA_DIR")
 DEFAULT_CONTROL_DT = 1.0 / 30.0
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_MAX_TASK_LENGTH = 800  # Max task length used to normalize reward calculation.
@@ -70,7 +70,7 @@ DEFAULT_WRIST_CAMERA_FPS = 60
 DEFAULT_CAMERA_SYNC_WAIT_TIMEOUT_MS = 5.0
 DEFAULT_HISTORY_WAIT_TIMEOUT_MS = 2.0
 DEFAULT_ACTION_HISTORY_WAIT_TIMEOUT_MS = 2.0
-DEFAULT_RTC_OBS_LATENCY_STEPS = 1 #测出来是有个读出延迟为一帧,曝光延迟不知道有没有，至少挺小的，不到一帧
+DEFAULT_RTC_OBS_LATENCY_STEPS = 1 #
 
 
 @ray.remote(num_gpus=1)
@@ -207,7 +207,12 @@ def main(cfg: OmegaConf):
         "yellow",
     )
     cprint("Policy arm execution uses direct interpolation.", "yellow")
-    data_dir = os.path.expanduser(DEFAULT_DATA_DIR)
+    if not DEFAULT_DATA_DIR:
+        raise ValueError(
+            "Missing rollout output directory. Set DEXPIE_DATA_DIR or pass "
+            "the output directory to scripts/RTC_expert_interve_collect.sh."
+        )
+    data_dir = os.path.abspath(os.path.expanduser(DEFAULT_DATA_DIR))
     os.makedirs(data_dir, exist_ok=True)
 
     img_size = DEFAULT_IMAGE_SIZE

@@ -1,13 +1,32 @@
 
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hydra/
+wandb/
+logs.json.txt
+
 *.h5
+*.hdf5
 *.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+*.zarr/
 *.egg-info/
 ckpts/
+
+/DexPIE/data/outputs/
+/DexPIE/visualizations/
+/visualizations/
 
 raw_data/
 timm/
 .vscode/
+.DS_Store
 
 deploy_dir/
 deploy_vis_dir/

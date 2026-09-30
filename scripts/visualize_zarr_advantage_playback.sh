@@ -3,7 +3,6 @@ set -euo pipefail
 
 # Examples:
 #
-#   bash scripts/visualize_zarr_advantage_playback.sh
 #   bash scripts/visualize_zarr_advantage_playback.sh /path/to/dataset.zarr
 #   bash scripts/visualize_zarr_advantage_playback.sh /path/to/dataset.zarr 25 /path/to/advantage_quantiles.json 3
 #   bash scripts/visualize_zarr_advantage_playback.sh /path/to/dataset.zarr 25 none 0 --start-frame 100
@@ -11,8 +10,13 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/.." && pwd)"
 
-python_bin="${PYTHON:-/home/lrz/miniconda3/envs/idp3/bin/python}"
-dataset_path="${1:-/home/lrz/dp_data/task1_Recap_iter1}"
+if (( $# < 1 )); then
+    echo "Usage: $0 DATASET [FPS] [QUANTILES_JSON|none] [EPISODE] [EXTRA_ARGS...]" >&2
+    exit 2
+fi
+
+python_bin="${PYTHON:-python}"
+dataset_path=$1
 fps="${2:-25}"
 quantiles_path="${3:-${dataset_path}/advantage_quantiles.json}"
 episode="${4:-0}"
